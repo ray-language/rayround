@@ -1,0 +1,150 @@
+// Renders the app icon: a red tile (a radial gradient, full bleed: iOS and Android mask it
+// themselves) with a white timer ring, its crown on top, and a ring bell inside. Two sizes:
+// assets/icon.png (1024, the bundles) and www/icon.png (512, the page and the lock screen).
+//
+//   ray build --native --release scripts/make-icon.ray -o /tmp/make-icon && /tmp/make-icon
+//
+// Drawn in a 1024 × 1024 space, 4 × 4 samples per pixel for smooth edges.
+
+import std/fs;
+import std/image;
+import std/math;
+
+const SS: int = 4;
+
+fn sq(x: float) -> float {
+    x * x
+}
+
+/// Inside a rectangle with rounded corners (center, half sizes, radius).
+fn in_round_rect(x: float, y: float, cx: float, cy: float, hw: float, hh: float, r: float) -> bool {
+    let dx = math.max(math.abs(x - cx) - (hw - r), 0.0);
+    let dy = math.max(math.abs(y - cy) - (hh - r), 0.0);
+    if (math.abs(x - cx) > hw || math.abs(y - cy) > hh) {
+        return false;
+    }
+    sq(dx) + sq(dy) <= sq(r)
+}
+
+const RING_CX: float = 512.0;
+
+const RING_CY: float = 560.0;
+
+const RING_R: float = 318.0;
+
+const RING_W: float = 58.0;
+
+/// The ring: 300° of a thick circle from the top, clockwise, with round ends; the gap is the
+/// time already gone.
+fn in_ring(x: float, y: float) -> bool {
+    let dx = x - RING_CX;
+    let dy = y - RING_CY;
+    let d = math.sqrt(sq(dx) + sq(dy));
+    let half = RING_W / 2.0;
+    // Angle from the top, clockwise, in degrees 0..360.
+    var a = math.atan2(dx, -dy) * 180.0 / math.PI;
+    if (a < 0.0) {
+        a = a + 360.0;
+    }
+    if (math.abs(d - RING_R) <= half && a <= 300.0) {
+        return true;
+    }
+    // Round caps at 0° and 300°.
+    for deg in [0.0, 300.0] {
+        let rad = deg * math.PI / 180.0;
+        let ex = RING_CX + RING_R * math.sin(rad);
+        let ey = RING_CY - RING_R * math.cos(rad);
+        if (sq(x - ex) + sq(y - ey) <= sq(half)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The stopwatch crown above the ring: a cap and its stem.
+fn in_crown(x: float, y: float) -> bool {
+    in_round_rect(x, y, 512.0, 168.0, 78.0, 34.0, 22.0)
+        || in_round_rect(x, y, 512.0, 218.0, 26.0, 30.0, 6.0)
+}
+
+/// The bell: a crown loop, a flared body, the lip and the clapper.
+fn in_bell(x: float, y: float) -> bool {
+    let cx = 512.0;
+    // The loop it hangs from.
+    let loop_d = math.sqrt(sq(x - cx) + sq(y - 382.0));
+    if (loop_d <= 34.0 && loop_d >= 16.0 && y <= 392.0) {
+        return true;
+    }
+    // The body: from y 400 to 650, half width growing like a bell's profile.
+    if (y >= 400.0 && y <= 650.0) {
+        let t = (y - 400.0) / 250.0;
+        let hw = 62.0 + 36.0 * t + 92.0 * math.pow(t, 3.2);
+        // A rounded shoulder at the top.
+        if (y < 440.0) {
+            let shoulder = math.sqrt(math.max(0.0, sq(62.0) - sq(440.0 - y) * 2.4));
+            return math.abs(x - cx) <= math.min(hw, shoulder + 0.01);
+        }
+        return math.abs(x - cx) <= hw;
+    }
+    // The lip.
+    if (in_round_rect(x, y, cx, 662.0, 205.0, 18.0, 18.0)) {
+        return true;
+    }
+    // The clapper.
+    sq(x - cx) + sq(y - 712.0) <= sq(36.0)
+}
+
+/// The background at a point: a red radial gradient, lighter up and to the left.
+fn background(x: float, y: float) -> (float, float, float) {
+    let d = math.sqrt(sq(x - 360.0) + sq(y - 280.0)) / 1000.0;
+    let t = math.min(d, 1.0);
+    // #FA5252 → #8B1010
+    (250.0 + (139.0 - 250.0) * t, 82.0 + (16.0 - 82.0) * t, 82.0 + (16.0 - 82.0) * t)
+}
+
+fn render(size: int) -> image.Image {
+    let scale = 1024.0 / (size as float);
+    var px: [int] = [];
+    let n = (SS * SS) as float;
+    for py in 0..size {
+        for qx in 0..size {
+            var cover = 0.0;
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let x = ((qx as float) + ((sx as float) + 0.5) / (SS as float)) * scale;
+                    let y = ((py as float) + ((sy as float) + 0.5) / (SS as float)) * scale;
+                    if (in_ring(x, y) || in_crown(x, y) || in_bell(x, y)) {
+                        cover = cover + 1.0;
+                    }
+                }
+            }
+            let a = cover / n;
+            let bg = background(((qx as float) + 0.5) * scale, ((py as float) + 0.5) * scale);
+            px.push(math.round(bg.0 + (255.0 - bg.0) * a) as int);
+            px.push(math.round(bg.1 + (255.0 - bg.1) * a) as int);
+            px.push(math.round(bg.2 + (255.0 - bg.2) * a) as int);
+            px.push(255);
+        }
+    }
+    image.Image { width: size, height: size, pixels: bytes_of(px) }
+}
+
+fn write(path: string, size: int) -> Result<int, string> {
+    let png = image.encode_png(render(size))?;
+    fs.write_file_bytes(path, png)?;
+    print("${path}: ${size}×${size}, ${png.len()} bytes");
+    Result.Ok(0)
+}
+
+fn main() -> int {
+    match (write(
+        "assets/icon.png",
+        1024
+    ).and_then(fn(_n: int) -> Result<int, string> { write("www/icon.png", 512) })) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint("make-icon: " + e);
+            1
+        },
+    }
+}

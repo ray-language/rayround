@@ -1,0 +1,102 @@
+// Writes the app's sounds as WAV files, to listen to them anywhere:
+//   start.wav    one bell stroke (a round starts)
+//   end.wav      three strokes (a round ends)
+//   final.wav    five strokes (the last round ends)
+//   warning.wav  the clapper (10 s before the end)
+//   countdown.wav  the 5-second countdown into the first bell
+//
+//   ray run scripts/render-sounds.ray -- <directory>
+
+import std/fs;
+import plan;
+import sounds;
+
+fn mix(into: [float], xs: [float], at: int) {
+    for i in 0..xs.len() {
+        if (at + i < into.len()) {
+            into[at + i] = into[at + i] + xs[i];
+        }
+    }
+}
+
+fn silence(ms: int) -> [float] {
+    var xs: [float] = [];
+    for i in 0..(ms * sounds.RATE / 1000) {
+        xs.push(0.0);
+    }
+    xs
+}
+
+fn le(n: int, size: int) -> [int] {
+    var out: [int] = [];
+    for k in 0..size {
+        out.push((n >> (8 * k)) & 255);
+    }
+    out
+}
+
+fn wav(xs: [float]) -> bytes {
+    var pcm: [int] = [];
+    for x in xs {
+        let c = if (x > 1.0) { 1.0 } else if (x < -1.0) { -1.0 } else { x };
+        var n = (c * 0.8 * 32767.0) as int;
+        if (n < 0) {
+            n = n + 65536;
+        }
+        pcm.push(n & 255);
+        pcm.push(n >> 8);
+    }
+    let data = pcm.len();
+    let head = bytes_of(
+        [82, 73, 70, 70]
+            + le(36 + data, 4)
+            + [87, 65, 86, 69, 102, 109, 116, 32]
+            + le(16, 4)
+            + le(1, 2)
+            + le(1, 2)
+            + le(sounds.RATE, 4)
+            + le(sounds.RATE * 2, 4)
+            + le(2, 2)
+            + le(16, 2)
+            + [100, 97, 116, 97]
+            + le(data, 4)
+    );
+    bytes_concat([head, bytes_of(pcm)])
+}
+
+fn strokes(b: sounds.Bank, n: int) -> [float] {
+    let out = silence((n - 1) * plan.STROKE_GAP_MS + 2900);
+    for k in 0..n {
+        mix(out, b.bell, k * plan.STROKE_GAP_MS * sounds.RATE / 1000);
+    }
+    out
+}
+
+fn main() -> int {
+    let av = args();
+    let dir = if (av.len() > 0) { av[0] } else { "." };
+    let b = sounds.bank();
+    let countdown = silence(5000 + 2900);
+    for k in 0..5 {
+        mix(countdown, b.tick, k * sounds.RATE);
+    }
+    mix(countdown, b.bell, 5 * sounds.RATE);
+    let files: [(string, [float])] = [
+        ("start.wav", strokes(b, 1)),
+        ("end.wav", strokes(b, 3)),
+        ("final.wav", strokes(b, 5)),
+        ("warning.wav", b.clapper + silence(300)),
+        ("countdown.wav", countdown)
+    ];
+    for f in files {
+        let path = dir + "/" + f.0;
+        match (fs.write_file_bytes(path, wav(f.1))) {
+            Result.Ok(_) => print(path),
+            Result.Err(e) => {
+                eprint("render-sounds: " + e);
+                return 1;
+            },
+        }
+    }
+    0
+}

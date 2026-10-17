@@ -1,0 +1,52 @@
+// The page's protocol, against the real engine on a null sink.
+
+import std/json;
+import api;
+import engine;
+
+fn field_str(reply: string, key: string) -> string {
+    json.get_string(json.parse(reply).unwrap(), key).unwrap_or("")
+}
+
+fn field_int(reply: string, key: string) -> int {
+    json.get_int(json.parse(reply).unwrap(), key).unwrap_or(-1)
+}
+
+@test
+fn start_pause_and_stop_through_the_protocol() {
+    let cmds: Channel<engine.Cmd> = Channel.bounded(64);
+    let _e = spawn(fn() {
+        engine.run(cmds, b"");
+    });
+    let idle = api.handle(cmds, "{\"op\":\"state\"}");
+    assert_eq(field_str(idle, "status"), "idle");
+    assert_eq(field_int(idle, "total_ms"), (5 + 12 * 180 + 11 * 60) * 1000);
+    let started = api.handle(
+        cmds,
+        "{\"op\":\"start\",\"rounds\":3,\"round_s\":120,\"rest_s\":30,\"prep_s\":0,\"warn_s\":10}"
+    );
+    assert_eq(field_str(started, "status"), "running");
+    assert_eq(field_str(started, "phase"), "round");
+    assert_eq(field_int(started, "rounds"), 3);
+    assert_eq(field_int(started, "total_ms"), (3 * 120 + 2 * 30) * 1000);
+    let cfg = json.Json.JObject(json.get_object(json.parse(started).unwrap(), "config").unwrap());
+    assert_eq(json.get_int(cfg, "round_s"), Option.Some(120));
+    assert_eq(field_str(api.handle(cmds, "{\"op\":\"toggle\"}"), "status"), "paused");
+    assert_eq(field_str(api.handle(cmds, "{\"op\":\"skip\"}"), "phase"), "rest");
+    assert_eq(field_int(api.handle(cmds, "{\"op\":\"volume\",\"value\":40}"), "volume"), 40);
+    assert_eq(field_str(api.handle(cmds, "{\"op\":\"stop\"}"), "status"), "idle");
+    send(cmds, engine.Cmd.Quit);
+}
+
+@test
+fn bad_requests_answer_an_error() {
+    let cmds: Channel<engine.Cmd> = Channel.bounded(64);
+    let _e = spawn(fn() {
+        engine.run(cmds, b"");
+    });
+    let r = api.handle(cmds, "{\"op\":\"dance\"}");
+    assert_eq(json.get_bool(json.parse(r).unwrap(), "ok"), Option.Some(false));
+    assert_eq(field_str(r, "error"), "unknown op: dance");
+    assert_eq(field_str(api.handle(cmds, "{\"op\":\"volume\"}"), "error"), "missing field 'value'");
+    send(cmds, engine.Cmd.Quit);
+}

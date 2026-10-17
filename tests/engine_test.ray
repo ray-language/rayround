@@ -1,0 +1,125 @@
+// The engine, driven by hand (render without a device) and as the actor over a null sink
+// (`make test` sets RAY_AUDIO_SINK=null: no sound card, the clock still runs).
+
+import std/time;
+import engine;
+import plan;
+import sounds;
+
+fn short() -> plan.Config {
+    plan.Config { rounds: 2, round_s: 5, rest_s: 2, prep_s: 2, warn_s: 3 }
+}
+
+/// Renders `ms` of the session in 20 ms chunks.
+fn run_for(s: engine.State, ms: int) {
+    var left = ms;
+    while (left > 0) {
+        let _pcm = engine.render(s, sounds.RATE * 20 / 1000);
+        left = left - 20;
+    }
+}
+
+@test
+fn the_session_moves_through_its_phases() {
+    let s = engine.new_state(b"");
+    engine.apply(s, engine.Cmd.Start(short()));
+    var snap = engine.snapshot_of(s);
+    assert_eq(snap.status, "running");
+    assert_eq(snap.phase, "prep");
+    assert_eq(snap.remaining_ms, 2000);
+    assert_eq(snap.total_ms, (2 + 5 + 2 + 5) * 1000);
+    run_for(s, 1000);
+    snap = engine.snapshot_of(s);
+    assert_eq(snap.phase, "prep");
+    assert_eq(snap.remaining_ms, 1000);
+    run_for(s, 1000);
+    snap = engine.snapshot_of(s);
+    assert_eq(snap.phase, "round");
+    assert_eq(snap.round, 1);
+    assert_eq(snap.remaining_ms, 5000);
+    // A pause holds the clock; the bell keeps ringing out.
+    engine.apply(s, engine.Cmd.Pause);
+    run_for(s, 500);
+    assert_eq(engine.snapshot_of(s).remaining_ms, 5000);
+    engine.apply(s, engine.Cmd.Resume);
+    // Skip: the rest of round 1, then the rest itself.
+    engine.apply(s, engine.Cmd.Skip);
+    snap = engine.snapshot_of(s);
+    assert_eq(snap.phase, "rest");
+    assert_eq(snap.round, 1);
+    engine.apply(s, engine.Cmd.Skip);
+    snap = engine.snapshot_of(s);
+    assert_eq(snap.phase, "round");
+    assert_eq(snap.round, 2);
+    run_for(s, 5000);
+    assert_eq(engine.snapshot_of(s).status, "done");
+    // The final five strokes still ring after the end: every cue has started.
+    run_for(s, 5 * plan.STROKE_GAP_MS);
+    assert_eq(s.next_cue, s.cues.len());
+    assert(s.voices.len() >= 5);
+    assert_eq(engine.snapshot_of(s).status, "done");
+    engine.apply(s, engine.Cmd.Stop);
+    assert_eq(engine.snapshot_of(s).status, "idle");
+}
+
+fn loudest(pcm: bytes) -> int {
+    var m = 0;
+    var i = 0;
+    while (i + 1 < pcm.len()) {
+        var v = pcm[i] + pcm[i + 1] * 256;
+        if (v >= 32768) {
+            v = 65536 - v;
+        }
+        if (v > m) {
+            m = v;
+        }
+        i = i + 2;
+    }
+    m
+}
+
+@test
+fn cues_sound_on_their_frame() {
+    let s = engine.new_state(b"");
+    engine.apply(s, engine.Cmd.Start(short()));
+    // The first countdown beep starts at 0: the first chunk is not silent.
+    assert(loudest(engine.render(s, sounds.RATE * 20 / 1000)) > 1000);
+    // Between beeps (300–900 ms) there is silence.
+    run_for(s, 280);
+    assert_eq(loudest(engine.render(s, sounds.RATE * 20 / 1000)), 0);
+    // Volume 0 silences everything.
+    engine.apply(s, engine.Cmd.Volume(0));
+    run_for(s, 680);
+    assert_eq(loudest(engine.render(s, sounds.RATE * 20 / 1000)), 0);
+}
+
+@test
+fn the_actor_runs_on_the_audio_clock() {
+    let cmds: Channel<engine.Cmd> = Channel.bounded(64);
+    let _e = spawn(fn() {
+        engine.run(cmds, b"");
+    });
+    assert_eq(engine.query(cmds).status, "idle");
+    send(cmds, engine.Cmd.Start(short()));
+    time.sleep(700);
+    let a = engine.query(cmds);
+    assert_eq(a.status, "running");
+    assert_eq(a.phase, "prep");
+    assert(a.remaining_ms < 1700);
+    assert(a.remaining_ms > 900);
+    send(cmds, engine.Cmd.Toggle);
+    time.sleep(300);
+    let held = engine.query(cmds).remaining_ms;
+    time.sleep(300);
+    let p = engine.query(cmds);
+    assert_eq(p.status, "paused");
+    assert_eq(p.remaining_ms, held);
+    send(cmds, engine.Cmd.Skip);
+    time.sleep(100);
+    let r = engine.query(cmds);
+    assert_eq(r.status, "running");
+    assert_eq(r.phase, "round");
+    send(cmds, engine.Cmd.Stop);
+    assert_eq(engine.query(cmds).status, "idle");
+    send(cmds, engine.Cmd.Quit);
+}

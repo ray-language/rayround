@@ -1,0 +1,115 @@
+// RayRound: a boxing round timer for the phone. The clock and the sounds live in the raylang
+// program (engine.ray: the audio stream is the clock), so the timer keeps going with the screen
+// locked or in another app (`background_audio` in ray.toml); the page (www/) is plain HTML on
+// ray-elements served over ray://app, and only paints what `window.ray.request` answers.
+
+import std/embed;
+import std/media;
+import std/ui;
+import elements/bridge;
+import api;
+import engine;
+import plan;
+import remote;
+
+const APP_NAME: string = "RayRound";
+
+fn page_url() -> Result<string, string> {
+    let url = ui.app_url("app://index.html");
+    if (url.starts_with("ray://")) {
+        let files = ui.mount_embed_at("", "www")?;
+        if (files == 0) {
+            return Result.Err("no embedded page under www/");
+        }
+    }
+    Result.Ok(url)
+}
+
+fn autostart(spec: string) -> Option<plan.Config> {
+    let parts = spec.split(",");
+    if (parts.len() != 5) {
+        return Option.None;
+    }
+    var n: [int] = [];
+    for p in parts {
+        n.push(parse_int(p.trim())?);
+    }
+    Option.Some(
+        plan.Config { rounds: n[0], round_s: n[1], rest_s: n[2], prep_s: n[3], warn_s: n[4] }
+    )
+}
+
+fn main() -> int {
+    let url = match (page_url()) {
+        Result.Ok(u) => u,
+        Result.Err(e) => {
+            eprint("rayround: " + e);
+            return 1;
+        },
+    };
+    // The lock screen shows the app icon as the artwork.
+    let artwork = embed.read("www/icon.png").unwrap_or(b"");
+    let cmds: Channel<engine.Cmd> = Channel.bounded(64);
+    let _engine = spawn(fn() {
+        engine.run(cmds, artwork);
+    });
+
+    var o = ui.options(420, 800);
+    o.min_width = 320;
+    o.min_height = 560;
+    o.autosave = "rayround.main";
+    o.background = "#1a1b1e";
+    let window = match (ui.open_with(APP_NAME, url, o)) {
+        Result.Ok(w) => w,
+        Result.Err(e) => {
+            eprint("rayround: " + e);
+            return 1;
+        },
+    };
+    if let Result.Err(e) = media.controls(remote.commands()) {
+        eprint("rayround: media controls: " + e);
+    }
+    // For automation (the simulator has no fingers): RAYROUND_START="rounds,round_s,rest_s,
+    // prep_s,warn_s" starts a session at launch.
+    if let Option.Some(spec) = env("RAYROUND_START") {
+        match (autostart(spec)) {
+            Option.Some(c) => send(cmds, engine.Cmd.Start(c)),
+            Option.None => eprint("rayround: RAYROUND_START wants 5 numbers: " + spec),
+        }
+    }
+
+    while (true) {
+        let e = match (ui.next_event()) {
+            Result.Ok(e) => e,
+            Result.Err(err) => {
+                eprint("rayround: " + err);
+                return 1;
+            },
+        };
+        if (bridge.handle(e)) {
+            continue;  // a ray-elements request, already answered
+        }
+        if (e.kind == "closed" && e.window == window) {
+            send(cmds, engine.Cmd.Quit);
+            return 0;
+        }
+        if (e.kind == "media") {
+            match (remote.command(e.tag)) {
+                Option.Some(c) => send(cmds, c),
+                Option.None => eprint("rayround: unknown media command " + e.tag),
+            }
+        }
+        if (e.kind == "message") {
+            match (ui.as_request(e)) {
+                Option.Some(req) => {
+                    let target = if (e.window == 0) { window } else { e.window };
+                    if let Result.Err(err) = ui.reply_json(target, req.0, api.handle(cmds, req.1)) {
+                        eprint("rayround: reply: " + err);
+                    }
+                },
+                Option.None => { },
+            }
+        }
+    }
+    0
+}

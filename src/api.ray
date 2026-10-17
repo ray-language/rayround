@@ -1,0 +1,100 @@
+// The page ↔ program protocol over `window.ray.request({op, …})`: every request is answered
+// with the engine's snapshot as JSON (`ok: true`) or `{ok: false, error}`.
+//
+//   state                                   → the snapshot
+//   start {rounds, round_s, rest_s, prep_s, warn_s}
+//                                           → a new session with those settings
+//   toggle                                  → pause / resume (or start again when idle)
+//   pause · resume · skip · stop
+//   volume {value}                          → 0–100
+//   preview {sound}                         → 0 bell, 1 clapper, 2 tick
+//   log {message}                           → the page's errors, to the program's stderr
+
+import std/json;
+import engine;
+import plan;
+
+fn fail(msg: string) -> string {
+    json.obj().field("ok", false).field("error", msg).render()
+}
+
+fn config_json(c: plan.Config) -> string {
+    json.obj()
+        .field("rounds", c.rounds)
+        .field("round_s", c.round_s)
+        .field("rest_s", c.rest_s)
+        .field("prep_s", c.prep_s)
+        .field("warn_s", c.warn_s)
+        .render()
+}
+
+/// The snapshot as the page reads it.
+pub fn snapshot_json(s: engine.Snapshot) -> string {
+    let head = json.obj()
+        .field("ok", true)
+        .field("status", s.status)
+        .field("phase", s.phase)
+        .field("round", s.round)
+        .field("rounds", s.rounds)
+        .field("remaining_ms", s.remaining_ms)
+        .field("phase_ms", s.phase_ms)
+        .field("elapsed_ms", s.elapsed_ms)
+        .field("total_ms", s.total_ms)
+        .field("volume", s.volume)
+        .field("error", s.error)
+        .render();
+    // Splice the settings in: the builder has no raw-JSON field.
+    head.substring(0, head.len() - 1) + ",\"config\":" + config_json(s.config) + "}"
+}
+
+fn int_field(req: json.Json, key: string) -> Result<int, string> {
+    match (json.get_int(req, key)) {
+        Option.Some(n) => Result.Ok(n),
+        Option.None => Result.Err("missing field '${key}'"),
+    }
+}
+
+/// The settings of a `start` request; a missing field keeps its default.
+pub fn config_of(req: json.Json) -> plan.Config {
+    let d = plan.default_config();
+    plan.Config {
+        rounds: json.get_int(req, "rounds").unwrap_or(d.rounds),
+        round_s: json.get_int(req, "round_s").unwrap_or(d.round_s),
+        rest_s: json.get_int(req, "rest_s").unwrap_or(d.rest_s),
+        prep_s: json.get_int(req, "prep_s").unwrap_or(d.prep_s),
+        warn_s: json.get_int(req, "warn_s").unwrap_or(d.warn_s)
+    }
+}
+
+fn dispatch(cmds: Channel<engine.Cmd>, body: string) -> Result<string, string> {
+    let req = json.parse(body)?;
+    let op = match (json.get_string(req, "op")) {
+        Option.Some(op) => op,
+        Option.None => return Result.Err("missing field 'op'"),
+    };
+    match (op) {
+        "state" => { },
+        "start" => send(cmds, engine.Cmd.Start(config_of(req))),
+        "toggle" => send(cmds, engine.Cmd.Toggle),
+        "pause" => send(cmds, engine.Cmd.Pause),
+        "resume" => send(cmds, engine.Cmd.Resume),
+        "skip" => send(cmds, engine.Cmd.Skip),
+        "stop" => send(cmds, engine.Cmd.Stop),
+        "volume" => send(cmds, engine.Cmd.Volume(int_field(req, "value")?)),
+        "preview" => send(cmds, engine.Cmd.Preview(int_field(req, "sound")?)),
+        "log" => eprint("rayround: page: " + json.get_string(req, "message").unwrap_or("")),
+        _ => return Result.Err("unknown op: ${op}"),
+    }
+    Result.Ok(snapshot_json(engine.query(cmds)))
+}
+
+/// Handles one request body; always returns a JSON reply.
+pub fn handle(cmds: Channel<engine.Cmd>, body: string) -> string {
+    match (dispatch(cmds, body)) {
+        Result.Ok(reply) => reply,
+        Result.Err(e) => {
+            eprint("rayround: request failed: " + e);
+            fail(e)
+        },
+    }
+}

@@ -1,0 +1,54 @@
+import sounds;
+
+fn peak(xs: [float]) -> float {
+    var m = 0.0;
+    for x in xs {
+        let a = if (x < 0.0) { -x } else { x };
+        if (a > m) {
+            m = a;
+        }
+    }
+    m
+}
+
+fn energy(xs: [float], from: int, to: int) -> float {
+    var e = 0.0;
+    for i in from..to {
+        e = e + xs[i] * xs[i];
+    }
+    e
+}
+
+@test
+fn the_bell_rings_and_fades() {
+    let b = sounds.bell();
+    assert_eq(b.len(), sounds.RATE * 28 / 10);
+    assert(peak(b) <= 0.9001);
+    assert(peak(b) >= 0.89);
+    // It starts at silence (no click) and dies out.
+    assert(b[0] == 0.0);
+    let w = sounds.RATE / 10;
+    let head = energy(b, 0, w);
+    let tail = energy(b, b.len() - w, b.len());
+    assert(head > 100.0 * tail);
+    assert(tail > 0.0);
+}
+
+@test
+fn the_clapper_is_three_short_clacks() {
+    let c = sounds.clapper();
+    let gap = sounds.RATE * 150 / 1000;
+    let quiet = sounds.RATE * 60 / 1000;
+    // Loud at each clack, quiet just before the next.
+    for k in 0..3 {
+        assert(energy(c, k * gap, k * gap + quiet / 4) > 1.0);
+    }
+    assert(energy(c, gap - sounds.RATE / 100, gap) < 0.05 * energy(c, 0, sounds.RATE / 100));
+}
+
+@test
+fn the_tick_is_short() {
+    let t = sounds.tick();
+    assert_eq(t.len(), sounds.RATE * 140 / 1000);
+    assert(peak(t) <= 0.6001);
+}

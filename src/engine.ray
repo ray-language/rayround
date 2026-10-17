@@ -1,0 +1,480 @@
+// The engine: ONE fiber owns the audio output and the session, and everything else talks to
+// it through a channel of commands (the actor pattern: fibers do not share a heap).
+//
+// The audio IS the clock. While a session runs the engine writes CHUNK_MS of sound at a time
+// (silence between the cues), `audio.write` parks it while the device is full, and the session
+// time advances by the frames written: a cue lands on its exact sample, nothing drifts, and the
+// stream that never stops is what keeps the app alive in the background (`background_audio`
+// in ray.toml). A paused session keeps writing silence for the same reason; with no session
+// and nothing ringing the output is closed and the fiber sleeps on its channel.
+//
+// What the user hears lags what was written by the device queue, so the time shown is the
+// written time minus what is still queued (`audio.played_ms`). Without a device (a test
+// machine with no sound card) the chunks are paced by the wall clock instead.
+//
+// The lock screen (std/media) shows the phase, the round and the time left; it is published
+// when the phase or the state changes, and the system moves the position on by itself.
+
+import std/audio;
+import std/math;
+import std/media;
+import std/time;
+import plan;
+import sounds;
+
+pub enum Cmd {
+    Start(plan.Config),
+    Pause,
+    Resume,
+    Toggle,
+    /// Jumps to the start of the next segment (the rest, the next round, the end).
+    Skip,
+    Stop,
+    Volume(int),
+    /// Plays one sound now (the settings' "test" buttons): 0 bell, 1 clapper, 2 tick.
+    Preview(int),
+    Query(Channel<Snapshot>),
+    Quit,
+}
+
+/// What the page shows.
+pub struct Snapshot {
+    /// "idle", "running", "paused" or "done".
+    status: string,
+    /// "prep", "round", "rest" or "done".
+    phase: string,
+    round: int,
+    rounds: int,
+    remaining_ms: int,
+    phase_ms: int,
+    elapsed_ms: int,
+    total_ms: int,
+    volume: int,
+    config: plan.Config,
+    error: string,
+}
+
+const CHUNK_MS: int = 20;
+
+const LATENCY_MS: int = 150;
+
+pub struct Voice {
+    sound: int,
+    pos: int,
+}
+
+pub struct State {
+    bank: sounds.Bank,
+    config: plan.Config,
+    segs: [plan.Segment],
+    cues: [plan.Cue],
+    next_cue: int,
+    status: string,
+    /// Session time in frames: advances only while running.
+    t: int,
+    voices: [Voice],
+    volume: int,
+    handle: int,
+    /// Frames written since the device was opened, and when (for pacing without a device).
+    written: int,
+    opened_at: int,
+    error: string,
+    artwork: bytes,
+    shown: string,
+    now_playing: bool,
+}
+
+fn ms_to_frames(ms: int) -> int {
+    ms * sounds.RATE / 1000
+}
+
+fn frames_to_ms(f: int) -> int {
+    f * 1000 / sounds.RATE
+}
+
+fn sound_index(s: plan.Sound) -> int {
+    match (s) {
+        plan.Sound.Bell => 0,
+        plan.Sound.Clapper => 1,
+        plan.Sound.Tick => 2,
+    }
+}
+
+fn samples(b: sounds.Bank, sound: int) -> [float] {
+    if (sound == 0) { b.bell } else if (sound == 1) { b.clapper } else { b.tick }
+}
+
+/// The session time the user is hearing: what was written minus what is still queued.
+fn heard_ms(s: State) -> int {
+    let t = frames_to_ms(s.t);
+    if (s.status != "running" || s.handle == 0) {
+        return t;
+    }
+    let queued = frames_to_ms(s.written) - audio.played_ms(s.handle).unwrap_or(0);
+    let at = t - if (queued > 0) { queued } else { 0 };
+    if (at < 0) { 0 } else { at }
+}
+
+pub fn snapshot_of(s: State) -> Snapshot {
+    let total = plan.total_ms(s.config);
+    let t = heard_ms(s);
+    let i = plan.locate(s.segs, t);
+    var phase = "done";
+    var round = s.config.rounds;
+    var remaining = 0;
+    var phase_ms = 0;
+    if (s.status == "idle") {
+        phase = "round";
+        round = 0;
+    } else if (i < s.segs.len()) {
+        let seg = s.segs[i];
+        phase = plan.phase_name(seg.phase);
+        round = seg.round;
+        remaining = seg.start_ms + seg.dur_ms - t;
+        phase_ms = seg.dur_ms;
+    }
+    Snapshot {
+        status: s.status,
+        phase: phase,
+        round: round,
+        rounds: s.config.rounds,
+        remaining_ms: remaining,
+        phase_ms: phase_ms,
+        elapsed_ms: if (t > total) { total } else { t },
+        total_ms: total,
+        volume: s.volume,
+        config: s.config,
+        error: s.error
+    }
+}
+
+fn open_output(s: State) {
+    if (s.handle != 0) {
+        return;
+    }
+    match (audio.open_latency(sounds.RATE, 1, LATENCY_MS)) {
+        Result.Ok(h) => {
+            s.handle = h;
+            s.error = "";
+        },
+        Result.Err(e) => {
+            // No device: the session still runs, paced by the clock, silent.
+            s.handle = 0;
+            s.error = "audio: " + e;
+        },
+    }
+    s.written = 0;
+    s.opened_at = time.monotonic();
+}
+
+fn close_output(s: State) {
+    if (s.handle != 0) {
+        let _d = audio.drain(s.handle);
+        close(s.handle);
+        s.handle = 0;
+    }
+}
+
+/// Discards what is queued (with the device's short fade) and closes: a stop cuts at once.
+fn cut_output(s: State) {
+    if (s.handle != 0) {
+        let _f = audio.flush(s.handle);
+        close(s.handle);
+        s.handle = 0;
+    }
+}
+
+/// Drops what is queued (with the device's short fade) so the next chunk sounds at once: a skip
+/// or a resume must not wait behind audio of the old state, and the time shown must not lag it.
+/// What was discarded never plays, so the written count restarts from what has.
+fn flush_queue(s: State) {
+    if (s.handle != 0) {
+        let _f = audio.flush(s.handle);
+        s.written = ms_to_frames(audio.played_ms(s.handle).unwrap_or(0));
+    }
+}
+
+fn start(s: State, c: plan.Config) {
+    let cfg = plan.sanitize(c);
+    s.config = cfg;
+    s.segs = plan.segments(cfg);
+    s.cues = plan.cues(cfg);
+    s.next_cue = 0;
+    s.t = 0;
+    s.status = "running";
+    flush_queue(s);
+    open_output(s);
+}
+
+fn skip(s: State) {
+    if (s.status != "running" && s.status != "paused") {
+        return;
+    }
+    let i = plan.locate(s.segs, frames_to_ms(s.t));
+    if (i >= s.segs.len()) {
+        return;
+    }
+    let to = s.segs[i].start_ms + s.segs[i].dur_ms;
+    s.t = ms_to_frames(to);
+    // The cues skipped over do not sound; the one at the new start (its bell) does.
+    while (s.next_cue < s.cues.len() && s.cues[s.next_cue].at_ms < to) {
+        s.next_cue = s.next_cue + 1;
+    }
+    // What was ringing stops: the next sound should not pile on a stale one.
+    s.voices = [];
+    if (s.status == "paused") {
+        s.status = "running";
+    }
+    flush_queue(s);
+}
+
+fn resume(s: State) {
+    if (s.status == "paused") {
+        s.status = "running";
+        // The silence written while paused is still queued.
+        flush_queue(s);
+    }
+}
+
+fn stop(s: State) {
+    s.status = "idle";
+    s.voices = [];
+    s.t = 0;
+    cut_output(s);
+}
+
+/// Applies one command; false once the engine should quit.
+pub fn apply(s: State, cmd: Cmd) -> bool {
+    match (cmd) {
+        Cmd.Start(c) => start(s, c),
+        Cmd.Pause => {
+            if (s.status == "running") {
+                s.status = "paused";
+            }
+        },
+        Cmd.Resume => resume(s),
+        Cmd.Toggle => {
+            if (s.status == "running") {
+                s.status = "paused";
+            } else if (s.status == "paused") {
+                resume(s);
+            } else if (s.status == "idle" || s.status == "done") {
+                start(s, s.config);
+            }
+        },
+        Cmd.Skip => skip(s),
+        Cmd.Stop => stop(s),
+        Cmd.Volume(v) => s.volume = if (v < 0) { 0 } else if (v > 100) { 100 } else { v },
+        Cmd.Preview(k) => {
+            if (k >= 0 && k <= 2) {
+                open_output(s);
+                s.voices.push(Voice { sound: k, pos: 0 });
+            }
+        },
+        Cmd.Query(reply) => send(reply, snapshot_of(s)),
+        Cmd.Quit => return false,
+    }
+    true
+}
+
+/// A soft knee above 0.8 so stacked bell strokes round off instead of clipping.
+fn limit(x: float) -> float {
+    let a = if (x < 0.0) { -x } else { x };
+    if (a <= 0.8) {
+        return x;
+    }
+    // 0.8 + 0.2·tanh((a − 0.8) / 0.2): never past 1.
+    let e = math.exp(2.0 * math.min((a - 0.8) / 0.2, 10.0));
+    let y = 0.8 + 0.2 * (e - 1.0) / (e + 1.0);
+    if (x < 0.0) { -y } else { y }
+}
+
+/// Renders the next chunk: cues due in it start on their exact frame, the voices are mixed, the
+/// session time advances if running. Returns s16le octets.
+pub fn render(s: State, frames: int) -> bytes {
+    let gain = (s.volume as float) * (s.volume as float) / 10000.0;
+    var out: [int] = [];
+    for f in 0..frames {
+        // After the end the clock runs on until the final strokes have all started.
+        if (s.status == "running" || (s.status == "done" && s.next_cue < s.cues.len())) {
+            while (s.next_cue < s.cues.len() && ms_to_frames(s.cues[s.next_cue].at_ms) <= s.t) {
+                let c = s.cues[s.next_cue];
+                s.voices.push(Voice { sound: sound_index(c.sound), pos: 0 });
+                s.next_cue = s.next_cue + 1;
+            }
+            s.t = s.t + 1;
+        }
+        var v = 0.0;
+        for j in 0..s.voices.len() {
+            let xs = samples(s.bank, s.voices[j].sound);
+            let pos = s.voices[j].pos;
+            if (pos < xs.len()) {
+                v = v + xs[pos];
+                s.voices[j].pos = pos + 1;
+            }
+        }
+        let y = limit(v * gain);
+        var n = (y * 32767.0) as int;
+        if (n < 0) {
+            n = n + 65536;
+        }
+        out.push(n & 255);
+        out.push((n >> 8) & 255);
+    }
+    // Voices that have finished leave the mix.
+    var live: [Voice] = [];
+    for voice in s.voices {
+        if (voice.pos < samples(s.bank, voice.sound).len()) {
+            live.push(voice);
+        }
+    }
+    s.voices = live;
+    // The last segment is over once the clock passes the total.
+    if (s.status == "running" && frames_to_ms(s.t) >= plan.total_ms(s.config)) {
+        s.status = "done";
+    }
+    bytes_of(out)
+}
+
+/// Writes one chunk to the device, or waits its duration where there is none.
+fn write_chunk(s: State) {
+    let frames = ms_to_frames(CHUNK_MS);
+    let pcm = render(s, frames);
+    if (s.handle != 0) {
+        match (audio.write(s.handle, pcm)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                s.error = "audio: " + e;
+                s.handle = 0;
+            },
+        }
+    } else {
+        let due = s.opened_at + frames_to_ms(s.written + frames);
+        let wait = due - time.monotonic();
+        if (wait > 0) {
+            time.sleep(wait);
+        }
+    }
+    s.written = s.written + frames;
+}
+
+fn spanish_time(ms: int) -> string {
+    let total = ms / 1000;
+    let m = total / 60;
+    let sec = total % 60;
+    "${m}:" + if (sec < 10) { "0" } else { "" } + "${sec}"
+}
+
+/// Publishes the phase to the system's Now Playing when it changed.
+fn announce(s: State) {
+    if (!s.now_playing) {
+        return;
+    }
+    if (s.status == "idle") {
+        if (s.shown != "") {
+            s.shown = "";
+            let _c = media.clear();
+        }
+        return;
+    }
+    let snap = snapshot_of(s);
+    let key = "${snap.status}/${snap.phase}/${snap.round}";
+    if (key == s.shown) {
+        return;
+    }
+    s.shown = key;
+    let c = s.config;
+    let title = match (snap.phase) {
+        "prep" => "Prepárate",
+        "round" => "Round ${snap.round} de ${snap.rounds}",
+        "rest" => "Descanso · siguiente: round ${snap.round + 1}",
+        _ => "¡Terminado! ${snap.rounds} rounds",
+    };
+    let album = "${c.rounds} × ${spanish_time(c.round_s * 1000)} · descanso ${spanish_time(c.rest_s * 1000)}";
+    var info = media.track(title, "RayRound", album);
+    info.artwork = s.artwork;
+    info.duration_ms = snap.phase_ms;
+    info.position_ms = snap.phase_ms - snap.remaining_ms;
+    info.playing = snap.status == "running";
+    if let Result.Err(e) = media.now_playing(info) {
+        eprint("rayround: now playing: " + e);
+        s.now_playing = false;
+    }
+}
+
+pub fn new_state(artwork: bytes) -> State {
+    State {
+        bank: sounds.bank(),
+        config: plan.default_config(),
+        segs: [],
+        cues: [],
+        next_cue: 0,
+        status: "idle",
+        t: 0,
+        voices: [],
+        volume: 80,
+        handle: 0,
+        written: 0,
+        opened_at: 0,
+        error: "",
+        artwork: artwork,
+        shown: "",
+        now_playing: true
+    }
+}
+
+/// A finished session whose last bell strokes have not all started yet.
+fn pending_cues(s: State) -> bool {
+    s.status == "done" && s.next_cue < s.cues.len()
+}
+
+/// The engine's loop: run it in its own fiber.
+pub fn run(cmds: Channel<Cmd>, artwork: bytes) {
+    let s = new_state(artwork);
+    var alive = true;
+    while (alive) {
+        let busy = s.status == "running"
+            || s.status == "paused"
+            || s.voices.len() > 0
+            || pending_cues(s);
+        if (!busy) {
+            // Nothing to play: close the device (a finished session's tail has rung out) and
+            // sleep until a command arrives.
+            close_output(s);
+            announce(s);
+            match (recv(cmds)) {
+                Option.Some(c) => alive = apply(s, c),
+                Option.None => alive = false,
+            }
+        } else {
+            // Commands are picked up between chunks.
+            var draining = true;
+            while (draining && alive) {
+                match (try_recv(cmds)) {
+                    Received.Got(c) => alive = apply(s, c),
+                    Received.Empty => draining = false,
+                    Received.Closed => alive = false,
+                }
+            }
+            if (alive
+                && (s.status == "running"
+                    || s.status == "paused"
+                    || s.voices.len() > 0
+                    || pending_cues(s))) {
+                write_chunk(s);
+            }
+        }
+        announce(s);
+    }
+    cut_output(s);
+    if (s.shown != "") {
+        let _c = media.clear();
+    }
+}
+
+/// Asks the engine for a snapshot (from any other fiber).
+pub fn query(cmds: Channel<Cmd>) -> Snapshot {
+    let reply: Channel<Snapshot> = Channel.bounded(1);
+    send(cmds, Cmd.Query(reply));
+    recv(reply).unwrap()
+}

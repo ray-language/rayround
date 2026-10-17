@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="es" data-primary="red">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RayRound</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="/node_modules/@raylang/elements/tokens.css">
+<link rel="stylesheet" href="/node_modules/@raylang/elements/base.css">
+<style>
+  :not(:defined) { visibility: hidden; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { overscroll-behavior: none; }
+
+  /* The color of the phase: the ring, the label, the glow behind the dial. */
+  .timer { --phase: var(--ray-primary); --phase-soft: var(--ray-primary-light); }
+  .timer[data-phase="prep"] { --phase: light-dark(var(--ray-orange-7), var(--ray-yellow-5)); --phase-soft: var(--ray-yellow-light); }
+  .timer[data-phase="rest"] { --phase: light-dark(var(--ray-teal-7), var(--ray-teal-5)); --phase-soft: var(--ray-teal-light); }
+  .timer[data-phase="done"] { --phase: var(--ray-primary); }
+
+  .timer {
+    display: flex; flex-direction: column; align-items: center; gap: var(--ray-space-md);
+    padding-bottom: calc(var(--ray-space-md) + env(safe-area-inset-bottom));
+  }
+  .heading { display: flex; flex-direction: column; align-items: center; gap: var(--ray-space-1); min-height: 3.2rem; }
+  .phase {
+    font-size: var(--ray-font-size-xl); font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--phase); transition: color 300ms;
+  }
+  .round-of { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); letter-spacing: 0.06em; }
+
+  /* The dial: an SVG ring that empties as the phase runs out, the time in the middle. */
+  .dial { position: relative; width: min(82vw, 21rem); aspect-ratio: 1; }
+  .dial::before {
+    content: ""; position: absolute; inset: 8%; border-radius: 50%;
+    background: radial-gradient(circle, var(--phase-soft) 0%, transparent 70%);
+    filter: blur(18px); opacity: 0.9; transition: background 300ms;
+  }
+  .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+  .dial .track { stroke: var(--ray-border); }
+  .dial .minor { stroke: var(--ray-border); }
+  .dial .bar {
+    stroke: var(--phase); stroke-linecap: round;
+    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--phase) 55%, transparent));
+    transition: stroke 300ms;
+  }
+  .dial .center {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .clock {
+    font-size: clamp(3.6rem, 19vw, 5.6rem); font-weight: 800; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  }
+  .sub { margin-top: var(--ray-space-2); color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); font-variant-numeric: tabular-nums; }
+  /* The last seconds of a round: the time beats in the phase color. */
+  .timer.closing .clock { color: var(--phase); animation: beat 1s ease-in-out infinite; }
+  .timer[data-status="paused"] .clock { animation: blink 1.4s steps(2, jump-none) infinite; }
+  @keyframes beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.06); } }
+  @keyframes blink { 50% { opacity: 0.35; } }
+
+  /* One pip per round: done, current, still to come. */
+  .pips { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: 21rem; min-height: 10px; }
+  .pip { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--ray-border); transition: all 250ms; }
+  .pip.done { background: var(--ray-primary); border-color: var(--ray-primary); }
+  .pip.now { border-color: var(--ray-primary); box-shadow: 0 0 0 3px var(--ray-primary-light); }
+  .pips.many .pip { width: 7px; height: 7px; border-width: 1.5px; }
+
+  .totals { width: min(88vw, 22rem); }
+  .totals .row { display: flex; justify-content: space-between; color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); font-variant-numeric: tabular-nums; margin-bottom: var(--ray-space-1); }
+
+  .controls { display: flex; align-items: center; justify-content: center; gap: var(--ray-space-xl); margin-top: var(--ray-space-sm); }
+  #main {
+    --size: 5.5rem;
+    width: var(--size); height: var(--size); border-radius: 50%; border: 0; cursor: pointer;
+    display: grid; place-items: center; color: var(--ray-red-contrast);
+    background: radial-gradient(circle at 35% 30%, var(--ray-red-5), var(--ray-red-9));
+    box-shadow: 0 10px 28px -6px color-mix(in srgb, var(--ray-red-7) 70%, transparent), inset 0 -4px 0 color-mix(in srgb, var(--ray-red-9) 60%, transparent);
+    transition: transform 120ms, box-shadow 120ms;
+  }
+  #main:active { transform: scale(0.95); box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--ray-red-7) 70%, transparent), inset 0 -2px 0 color-mix(in srgb, var(--ray-red-9) 60%, transparent); }
+  #main svg { width: 2.4rem; height: 2.4rem; }
+  #main:focus-visible { outline: 3px solid var(--ray-primary-light); outline-offset: 4px; }
+
+  .summary { width: min(92vw, 24rem); }
+  .summary .line { display: flex; align-items: center; justify-content: space-between; gap: var(--ray-space-sm); }
+  .summary .what { margin-top: var(--ray-space-1); font-weight: 700; font-size: var(--ray-font-size-lg); font-variant-numeric: tabular-nums; }
+  .summary .detail { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); }
+  .summary[hidden] { display: none; }
+
+  /* Settings */
+  .presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--ray-space-xs); }
+  .preset {
+    text-align: left; padding: var(--ray-space-sm); border-radius: var(--ray-radius-md); cursor: pointer;
+    border: 1px solid var(--ray-border); background: var(--ray-card); color: var(--ray-foreground); font: inherit;
+  }
+  .preset b { display: block; font-size: var(--ray-font-size-sm); }
+  .preset span { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); font-variant-numeric: tabular-nums; }
+  .preset[aria-pressed="true"] { border-color: var(--ray-primary); background: var(--ray-primary-light); }
+  .duration { display: flex; align-items: center; justify-content: space-between; gap: var(--ray-space-sm); }
+  .duration .label { font-size: var(--ray-font-size-sm); font-weight: 600; }
+  .note { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
+  .duration .hint { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
+  .duration .value { min-width: 4.2rem; text-align: center; font-size: var(--ray-font-size-xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .section-title { font-size: var(--ray-font-size-xs); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ray-muted-foreground); margin-top: var(--ray-space-sm); }
+  .notice { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); text-align: center; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<ray-app-shell padding="md">
+  <ray-app-bar slot="header" label="RayRound">
+    <ray-icon-button slot="end" id="open-settings" label="Ajustes"><ray-icon name="settings"></ray-icon></ray-icon-button>
+    <ray-theme-toggle slot="end"></ray-theme-toggle>
+  </ray-app-bar>
+
+  <section class="timer" id="timer" data-phase="idle" data-status="idle">
+    <div class="heading">
+      <div class="phase" id="phase">Listo</div>
+      <div class="round-of" id="round-of">12 rounds · 3:00 · descanso 1:00</div>
+    </div>
+
+    <div class="dial">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
+        <g id="ticks"></g>
+        <circle class="track" cx="100" cy="100" r="84" fill="none" stroke-width="8"></circle>
+        <circle class="bar" id="bar" cx="100" cy="100" r="84" fill="none" stroke-width="8"></circle>
+      </svg>
+      <div class="center">
+        <div class="clock" id="clock" role="timer" aria-live="off">3:00</div>
+        <div class="sub" id="sub">Pulsa para empezar</div>
+      </div>
+    </div>
+
+    <div class="pips" id="pips" aria-hidden="true"></div>
+
+    <div class="controls">
+      <ray-icon-button id="reset" label="Reiniciar" size="xl" variant="default" radius="full" disabled><ray-icon name="reset"></ray-icon></ray-icon-button>
+      <button id="main" type="button" aria-label="Empezar"></button>
+      <ray-icon-button id="skip" label="Saltar fase" size="xl" variant="default" radius="full" disabled><ray-icon name="skip"></ray-icon></ray-icon-button>
+    </div>
+
+    <div class="totals">
+      <div class="row"><span id="elapsed">0:00</span><span id="total">47:05</span></div>
+      <ray-progress id="total-bar" value="0" size="sm" label="Sesión"></ray-progress>
+    </div>
+
+    <ray-card class="summary" id="summary" with-border>
+      <div class="line">
+        <div>
+          <ray-badge id="sum-preset" size="xs" variant="light">Boxeo profesional</ray-badge>
+          <div class="what" id="sum-what">12 × 3:00</div>
+          <div class="detail" id="sum-detail">Descanso 1:00 · cuenta atrás 5 s · aviso a los 10 s</div>
+        </div>
+        <ray-button id="edit" variant="light" size="sm"><ray-icon slot="left" name="settings"></ray-icon>Cambiar</ray-button>
+      </div>
+    </ray-card>
+    <div class="notice" id="notice">El temporizador sigue sonando con la pantalla bloqueada</div>
+  </section>
+</ray-app-shell>
+
+<ray-drawer id="settings" position="bottom" size="85dvh" label="Ajustes">
+  <ray-stack gap="md">
+    <div class="section-title">Preajustes</div>
+    <div class="presets" id="presets"></div>
+
+    <div class="section-title">Sesión</div>
+    <ray-number-input id="rounds" label="Rounds" min="1" max="99" value="12" size="md"></ray-number-input>
+    <div class="duration" data-key="round_s" data-min="5" data-max="3540">
+      <div><div class="label">Duración del round</div><div class="hint">pasos de 15 s</div></div>
+      <ray-group gap="xs" nowrap>
+        <ray-icon-button label="Menos" variant="default" size="lg" data-step="-15"><ray-icon name="minus"></ray-icon></ray-icon-button>
+        <div class="value">3:00</div>
+        <ray-icon-button label="Más" variant="default" size="lg" data-step="15"><ray-icon name="plus"></ray-icon></ray-icon-button>
+      </ray-group>
+    </div>
+    <div class="duration" data-key="rest_s" data-min="0" data-max="1800">
+      <div><div class="label">Descanso</div><div class="hint">0 = sin descanso</div></div>
+      <ray-group gap="xs" nowrap>
+        <ray-icon-button label="Menos" variant="default" size="lg" data-step="-15"><ray-icon name="minus"></ray-icon></ray-icon-button>
+        <div class="value">1:00</div>
+        <ray-icon-button label="Más" variant="default" size="lg" data-step="15"><ray-icon name="plus"></ray-icon></ray-icon-button>
+      </ray-group>
+    </div>
+    <ray-group grow gap="sm">
+      <ray-number-input id="prep" label="Cuenta atrás" min="0" max="60" value="5" suffix=" s" size="md"></ray-number-input>
+      <ray-number-input id="warn" label="Aviso final" min="0" max="60" value="10" suffix=" s" size="md"></ray-number-input>
+    </ray-group>
+    <div class="note">Cuenta atrás antes del primer round, con un bip por segundo. El aviso es la claqueta antes del final de cada round. 0 = ninguno.</div>
+
+    <div class="section-title">Sonido</div>
+    <ray-slider id="volume" label="Volumen" min="0" max="100" value="80" show-value unit="%"></ray-slider>
+    <ray-group gap="xs">
+      <ray-button variant="default" size="sm" data-preview="0"><ray-icon slot="left" name="bell"></ray-icon>Campana</ray-button>
+      <ray-button variant="default" size="sm" data-preview="1"><ray-icon slot="left" name="clapper"></ray-icon>Claqueta</ray-button>
+      <ray-button variant="default" size="sm" data-preview="2"><ray-icon slot="left" name="tick"></ray-icon>Bip</ray-button>
+    </ray-group>
+
+    <div class="section-title">Pantalla</div>
+    <ray-switch id="awake" label="Mantener la pantalla encendida" description="Mientras corre el temporizador" checked></ray-switch>
+    <ray-switch id="vibrate" label="Vibrar al cambiar de fase" description="Donde el teléfono lo permite" checked></ray-switch>
+  </ray-stack>
+  <ray-group slot="footer" justify="space-between">
+    <ray-button id="defaults" variant="subtle">Valores por defecto</ray-button>
+    <ray-button id="done" data-dialog-close>Listo</ray-button>
+  </ray-group>
+</ray-drawer>
+
+<script>
+  // The page's errors reach the program's stderr (the phone's webview has no console here).
+  function report(msg) { if (window.ray && window.ray.request) window.ray.request({ op: 'log', message: String(msg) }); }
+  addEventListener('error', (e) => report(e.message + ' @' + e.lineno + ':' + e.colno));
+  addEventListener('unhandledrejection', (e) => report('unhandled: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+</script>
+<script type="module">
+import { enableRaylang, setIcons, confirmDialog } from "@raylang/elements";
+
+const stroke = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
+setIcons({
+  'skip': stroke + '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>',
+  'reset': stroke + '<path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 3 3 9 9 9"/></svg>',
+  'clapper': stroke + '<rect x="3" y="9" width="18" height="4" rx="1.5" transform="rotate(-12 12 11)"/><rect x="3" y="14" width="18" height="4" rx="1.5"/></svg>',
+  'tick': stroke + '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>',
+});
+await enableRaylang();
+
+const $ = (id) => document.getElementById(id);
+const PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>';
+const PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.2" height="14" rx="1.2"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.2"/></svg>';
+const R = 84, CIRC = 2 * Math.PI * R;
+
+const PRESETS = [
+  { name: 'Boxeo profesional', rounds: 12, round_s: 180, rest_s: 60 },
+  { name: 'Boxeo amateur', rounds: 3, round_s: 180, rest_s: 60 },
+  { name: 'Boxeo femenino', rounds: 10, round_s: 120, rest_s: 60 },
+  { name: 'MMA', rounds: 5, round_s: 300, rest_s: 60 },
+  { name: 'Muay Thai', rounds: 5, round_s: 180, rest_s: 120 },
+  { name: 'Saco (HIIT)', rounds: 10, round_s: 120, rest_s: 30 },
+];
+const DEFAULTS = { rounds: 12, round_s: 180, rest_s: 60, prep_s: 5, warn_s: 10 };
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('rayround.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('rayround.' + k, JSON.stringify(v)); } catch {} },
+};
+
+let config = Object.assign({}, DEFAULTS, store.get('config', {}));
+let prefs = Object.assign({ volume: 80, awake: true, vibrate: true }, store.get('prefs', {}));
+let state = null;          // the last snapshot
+let stateAt = 0;           // when it arrived (performance.now)
+let lastPhaseKey = '';
+let wakeLock = null;
+
+function fmt(ms, ceil) {
+  const s = Math.max(0, ceil ? Math.ceil(ms / 1000) : Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = h ? String(m).padStart(2, '0') : String(m);
+  return (h ? h + ':' : '') + mm + ':' + String(sec).padStart(2, '0');
+}
+const fmtS = (s) => fmt(s * 1000);
+const totalOf = (c) => (c.prep_s + c.rounds * c.round_s + (c.rest_s > 0 ? (c.rounds - 1) * c.rest_s : 0)) * 1000;
+
+async function call(op, args) {
+  if (!window.ray || !window.ray.request) {
+    $('notice').textContent = 'Abre esta página dentro de la app RayRound';
+    return null;
+  }
+  const r = await window.ray.request(Object.assign({ op }, args || {}));
+  const reply = typeof r === 'string' ? JSON.parse(r) : r;
+  if (!reply.ok) { $('notice').textContent = 'Error: ' + reply.error; return null; }
+  state = reply;
+  stateAt = performance.now();
+  onState();
+  return reply;
+}
+
+// ---- the dial ----
+
+{
+  // 60 small ticks around the ring, a longer one every 5.
+  const g = $('ticks');
+  let html = '';
+  for (let i = 0; i < 60; i++) {
+    const a = (i / 60) * 2 * Math.PI, long = i % 5 === 0;
+    const r1 = 95, r2 = long ? 90 : 92.5;
+    html += `<line class="minor" x1="${100 + r1 * Math.cos(a)}" y1="${100 + r1 * Math.sin(a)}" x2="${100 + r2 * Math.cos(a)}" y2="${100 + r2 * Math.sin(a)}" stroke-width="${long ? 1.6 : 0.8}" stroke-linecap="round"/>`;
+  }
+  g.innerHTML = html;
+  $('bar').style.strokeDasharray = CIRC;
+}
+
+function setRing(fraction) {
+  const f = Math.min(1, Math.max(0, fraction));
+  $('bar').style.strokeDashoffset = CIRC * (1 - f);
+}
+
+// What the clock shows now: the last snapshot moved on by the time since it arrived.
+function liveRemaining() {
+  if (!state) return 0;
+  if (state.status !== 'running') return state.remaining_ms;
+  return Math.max(0, state.remaining_ms - (performance.now() - stateAt));
+}
+function liveElapsed() {
+  if (!state) return 0;
+  if (state.status !== 'running') return state.elapsed_ms;
+  return Math.min(state.total_ms, state.elapsed_ms + (performance.now() - stateAt));
+}
+
+const PHASE_LABEL = { prep: 'Prepárate', round: 'Round', rest: 'Descanso', done: '¡Terminado!' };
+
+function paint() {
+  const t = $('timer');
+  const s = state;
+  if (!s || s.status === 'idle') {
+    t.dataset.phase = 'idle';
+    t.dataset.status = 'idle';
+    t.classList.remove('closing');
+    $('phase').textContent = 'Listo';
+    $('round-of').textContent = `${config.rounds} rounds · ${fmtS(config.round_s)} · descanso ${fmtS(config.rest_s)}`;
+    $('clock').textContent = fmtS(config.round_s);
+    $('sub').textContent = 'Pulsa para empezar';
+    setRing(1);
+    $('elapsed').textContent = '0:00';
+    $('total').textContent = fmt(totalOf(config));
+    $('total-bar').value = 0;
+    paintPips(0, config.rounds, false);
+    return;
+  }
+  const rem = liveRemaining();
+  t.dataset.phase = s.phase;
+  t.dataset.status = s.status;
+  t.classList.toggle('closing', s.status === 'running' && s.phase === 'round' && rem <= s.config.warn_s * 1000 && rem > 0);
+  if (s.phase === 'round') {
+    $('phase').textContent = 'Round ' + s.round;
+    $('round-of').textContent = `de ${s.rounds}`;
+  } else if (s.phase === 'rest') {
+    $('phase').textContent = 'Descanso';
+    $('round-of').textContent = `siguiente: round ${s.round + 1} de ${s.rounds}`;
+  } else if (s.phase === 'prep') {
+    $('phase').textContent = 'Prepárate';
+    $('round-of').textContent = `${s.rounds} rounds de ${fmtS(s.config.round_s)}`;
+  } else {
+    $('phase').textContent = PHASE_LABEL.done;
+    $('round-of').textContent = `${s.rounds} rounds · ${fmt(s.total_ms)}`;
+  }
+  // The countdown shows whole seconds counting down (5, 4, 3…); the rest is m:ss.
+  $('clock').textContent = s.phase === 'done' ? fmt(s.total_ms) : (s.phase === 'prep' ? String(Math.ceil(rem / 1000)) : fmt(rem, true));
+  $('sub').textContent = s.status === 'paused' ? 'En pausa' : (s.phase === 'done' ? 'Buen trabajo' : (s.phase === 'round' ? `${fmt(s.phase_ms - rem)} transcurrido` : ''));
+  setRing(s.phase === 'done' ? 1 : (s.phase_ms ? rem / s.phase_ms : 0));
+  const el = liveElapsed();
+  $('elapsed').textContent = fmt(el);
+  $('total').textContent = '−' + fmt(s.total_ms - el, true);
+  $('total-bar').value = s.total_ms ? (100 * el) / s.total_ms : 0;
+  const doneRounds = s.phase === 'done' ? s.rounds : (s.phase === 'rest' ? s.round : Math.max(0, s.round - 1));
+  paintPips(doneRounds, s.rounds, s.phase === 'round');
+}
+
+let pipsKey = '';
+function paintPips(done, total, current) {
+  const key = done + '/' + total + '/' + current;
+  if (key === pipsKey) return;
+  pipsKey = key;
+  const box = $('pips');
+  box.classList.toggle('many', total > 24);
+  let html = '';
+  for (let i = 0; i < total; i++) {
+    const cls = i < done ? 'done' : (current && i === done ? 'now' : '');
+    html += `<span class="pip ${cls}"></span>`;
+  }
+  box.innerHTML = html;
+}
+
+function onState() {
+  const s = state;
+  const active = s && (s.status === 'running' || s.status === 'paused');
+  $('main').innerHTML = s && s.status === 'running' ? PAUSE : PLAY;
+  $('main').setAttribute('aria-label', s && s.status === 'running' ? 'Pausa' : (s && s.status === 'paused' ? 'Seguir' : 'Empezar'));
+  $('reset').disabled = !active && !(s && s.status === 'done');
+  $('skip').disabled = !active;
+  $('summary').hidden = !!active;
+  $('open-settings').disabled = !!active;
+  if (s && s.error) $('notice').textContent = s.error;
+  // A new phase (seen while the page is on screen): a buzz.
+  const key = s ? s.status + '/' + s.phase + '/' + s.round : '';
+  if (key !== lastPhaseKey) {
+    if (lastPhaseKey && s && s.status === 'running' && prefs.vibrate && navigator.vibrate) navigator.vibrate(s.phase === 'round' ? [120, 60, 120] : 200);
+    lastPhaseKey = key;
+  }
+  keepAwake(active && s.status === 'running');
+  paint();
+}
+
+// ---- screen wake lock (where the webview has it) ----
+
+async function keepAwake(on) {
+  const want = on && prefs.awake && 'wakeLock' in navigator && !document.hidden;
+  if (want && !wakeLock) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch { wakeLock = null; }
+  } else if (!want && wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+  }
+}
+
+// ---- controls ----
+
+$('main').onclick = () => {
+  if (!state || state.status === 'idle' || state.status === 'done') call('start', config);
+  else call('toggle');
+};
+$('skip').onclick = () => call('skip');
+$('reset').onclick = async () => {
+  if (state && state.status !== 'done') {
+    const ok = await confirmDialog({ label: '¿Terminar la sesión?', message: 'El temporizador vuelve al principio.', confirmLabel: 'Terminar', cancelLabel: 'Seguir', color: 'red', native: false });
+    if (!ok) return;
+  }
+  call('stop');
+};
+$('edit').onclick = () => $('settings').show();
+$('open-settings').onclick = () => $('settings').show();
+
+// ---- settings ----
+
+function sameAs(p) { return p.rounds === config.rounds && p.round_s === config.round_s && p.rest_s === config.rest_s; }
+
+function paintSettings() {
+  $('rounds').value = config.rounds;
+  $('prep').value = config.prep_s;
+  $('warn').value = config.warn_s;
+  for (const d of document.querySelectorAll('.duration')) {
+    d.querySelector('.value').textContent = fmtS(config[d.dataset.key]);
+  }
+  for (const b of document.querySelectorAll('.preset')) {
+    b.setAttribute('aria-pressed', String(sameAs(PRESETS[Number(b.dataset.i)])));
+  }
+  $('volume').value = prefs.volume;
+  $('awake').checked = prefs.awake;
+  $('vibrate').checked = prefs.vibrate;
+  const p = PRESETS.find(sameAs);
+  $('sum-preset').textContent = p ? p.name : 'Personalizado';
+  $('sum-what').textContent = `${config.rounds} × ${fmtS(config.round_s)}` + (config.rest_s ? ` / ${fmtS(config.rest_s)}` : '');
+  const bits = [`Total ${fmt(totalOf(config))}`];
+  if (config.prep_s) bits.push(`cuenta atrás ${config.prep_s} s`);
+  if (config.warn_s) bits.push(`aviso a ${config.warn_s} s`);
+  $('sum-detail').textContent = bits.join(' · ');
+  paint();
+}
+
+function saveConfig() {
+  store.set('config', config);
+  paintSettings();
+}
+
+{
+  const box = $('presets');
+  box.innerHTML = PRESETS.map((p, i) =>
+    `<button type="button" class="preset" data-i="${i}" aria-pressed="false"><b>${p.name}</b><span>${p.rounds} × ${fmtS(p.round_s)} · ${p.rest_s ? 'desc. ' + fmtS(p.rest_s) : 'sin desc.'}</span></button>`).join('');
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('.preset');
+    if (!b) return;
+    const p = PRESETS[Number(b.dataset.i)];
+    Object.assign(config, { rounds: p.rounds, round_s: p.round_s, rest_s: p.rest_s });
+    saveConfig();
+  });
+}
+
+for (const d of document.querySelectorAll('.duration')) {
+  const key = d.dataset.key, min = Number(d.dataset.min), max = Number(d.dataset.max);
+  for (const b of d.querySelectorAll('[data-step]')) {
+    const step = () => {
+      const v = config[key] + Number(b.dataset.step);
+      config[key] = Math.min(max, Math.max(min, v));
+      // The warning has to fit in the round.
+      if (key === 'round_s' && config.warn_s >= config.round_s) config.warn_s = 0;
+      saveConfig();
+    };
+    // Tap to step, hold to repeat.
+    let timer = 0, repeat = 0;
+    const stop = () => { clearTimeout(timer); clearInterval(repeat); };
+    b.addEventListener('pointerdown', () => { step(); timer = setTimeout(() => { repeat = setInterval(step, 90); }, 400); });
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, stop);
+    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); step(); } });
+  }
+}
+
+for (const [id, key] of [['rounds', 'rounds'], ['prep', 'prep_s'], ['warn', 'warn_s']]) {
+  $(id).addEventListener('change', (e) => {
+    const v = Number(e.target.value);
+    if (!Number.isFinite(v)) return;
+    config[key] = v;
+    if (key === 'warn_s' && config.warn_s >= config.round_s) config.warn_s = 0;
+    saveConfig();
+  });
+}
+
+let volTimer = 0;
+$('volume').addEventListener('input', (e) => {
+  prefs.volume = Number(e.target.value);
+  store.set('prefs', prefs);
+  clearTimeout(volTimer);
+  volTimer = setTimeout(() => call('volume', { value: prefs.volume }), 60);
+});
+for (const b of document.querySelectorAll('[data-preview]')) {
+  b.onclick = () => call('preview', { sound: Number(b.dataset.preview) });
+}
+$('awake').addEventListener('change', (e) => { prefs.awake = e.target.checked; store.set('prefs', prefs); onState(); });
+$('vibrate').addEventListener('change', (e) => { prefs.vibrate = e.target.checked; store.set('prefs', prefs); });
+$('defaults').onclick = () => { config = Object.assign({}, DEFAULTS); saveConfig(); };
+
+// ---- run ----
+
+paintSettings();
+await call('volume', { value: prefs.volume });
+// The page only paints: it asks for the state while it is on screen and moves the clock on
+// between answers. In the background its timers stop; the program's clock does not.
+setInterval(() => { if (!document.hidden) call('state'); }, 250);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) call('state'); else keepAwake(false); });
+(function frame() { if (state && state.status === 'running') paint(); requestAnimationFrame(frame); })();
+</script>
+</body>
+</html>

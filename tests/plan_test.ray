@@ -1,0 +1,110 @@
+import plan;
+
+fn cfg(rounds: int, round_s: int, rest_s: int, prep_s: int, warn_s: int) -> plan.Config {
+    plan.Config { rounds: rounds, round_s: round_s, rest_s: rest_s, prep_s: prep_s, warn_s: warn_s }
+}
+
+@test
+fn the_default_is_twelve_rounds_of_three_minutes() {
+    let c = plan.default_config();
+    assert_eq(c.rounds, 12);
+    assert_eq(c.round_s, 180);
+    assert_eq(c.rest_s, 60);
+    assert_eq(c.prep_s, 5);
+    assert_eq(c.warn_s, 10);
+    // 5 s + 12 × 3:00 + 11 × 1:00 = 47:05
+    assert_eq(plan.total_ms(c), (5 + 12 * 180 + 11 * 60) * 1000);
+}
+
+@test
+fn segments_alternate_rounds_and_rests_without_a_trailing_rest() {
+    let segs = plan.segments(cfg(3, 60, 30, 5, 10));
+    assert_eq(segs.len(), 6);
+    assert_eq(plan.phase_name(segs[0].phase), "prep");
+    assert_eq(plan.phase_name(segs[1].phase), "round");
+    assert_eq(segs[1].start_ms, 5000);
+    assert_eq(plan.phase_name(segs[2].phase), "rest");
+    assert_eq(segs[2].round, 1);
+    assert_eq(segs[3].start_ms, 5000 + 60000 + 30000);
+    assert_eq(plan.phase_name(segs[5].phase), "round");
+    assert_eq(segs[5].round, 3);
+    let last = segs[5];
+    assert_eq(last.start_ms + last.dur_ms, plan.total_ms(cfg(3, 60, 30, 5, 10)));
+}
+
+@test
+fn no_countdown_and_no_rest() {
+    let segs = plan.segments(cfg(2, 60, 0, 0, 10));
+    assert_eq(segs.len(), 2);
+    assert_eq(segs[1].start_ms, 60000);
+}
+
+fn count(cues: [plan.Cue], name: string) -> int {
+    var n = 0;
+    for c in cues {
+        let k = match (c.sound) {
+            plan.Sound.Bell => "bell",
+            plan.Sound.Clapper => "clapper",
+            plan.Sound.Tick => "tick",
+        };
+        if (k == name) {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+@test
+fn the_cues_of_a_session() {
+    let cues = plan.cues(cfg(2, 60, 30, 5, 10));
+    // Countdown: 5 beeps at 0..4 s; then the bell at 5 s.
+    assert_eq(cues[0].at_ms, 0);
+    assert_eq(cues[4].at_ms, 4000);
+    assert_eq(cues[5].at_ms, 5000);
+    // Two clappers, 10 s before each end; the first round ends at 65 s.
+    assert_eq(count(cues, "clapper"), 2);
+    assert_eq(cues[6].at_ms, 55000);
+    // Ends: 3 strokes, then 5 after the last round; starts: one stroke each.
+    assert_eq(count(cues, "bell"), 1 + 3 + 1 + 5);
+    assert_eq(cues[7].at_ms, 65000);
+    assert_eq(cues[8].at_ms, 65000 + plan.STROKE_GAP_MS);
+    // Rest: beeps 3, 2 and 1 s before the second round (at 95 s).
+    assert_eq(count(cues, "tick"), 5 + 3);
+    assert_eq(cues[10].at_ms, 92000);
+    assert_eq(cues[12].at_ms, 94000);
+    assert_eq(cues[13].at_ms, 95000);
+    // In time order.
+    for i in 1..cues.len() {
+        assert(cues[i - 1].at_ms <= cues[i].at_ms);
+    }
+}
+
+@test
+fn without_rest_the_end_bell_starts_the_next_round() {
+    let cues = plan.cues(cfg(2, 30, 0, 0, 0));
+    // Round 1: its start; its end (3 strokes) doubles as round 2's start; the final 5.
+    assert_eq(count(cues, "bell"), 1 + 3 + 5);
+    assert_eq(count(cues, "clapper"), 0);
+}
+
+@test
+fn sanitize_keeps_the_settings_in_range() {
+    let c = plan.sanitize(cfg(0, 2, -5, 500, 10));
+    assert_eq(c.rounds, 1);
+    assert_eq(c.round_s, 5);
+    assert_eq(c.rest_s, 0);
+    assert_eq(c.prep_s, plan.MAX_PREP_S);
+    // A warning as long as the round is dropped.
+    assert_eq(c.warn_s, 0);
+    assert_eq(plan.sanitize(cfg(200, 180, 60, 5, 10)).rounds, plan.MAX_ROUNDS);
+}
+
+@test
+fn locate_finds_the_segment_of_an_instant() {
+    let segs = plan.segments(cfg(2, 60, 30, 5, 10));
+    assert_eq(plan.locate(segs, 0), 0);
+    assert_eq(plan.locate(segs, 4999), 0);
+    assert_eq(plan.locate(segs, 5000), 1);
+    assert_eq(plan.locate(segs, 65000), 2);
+    assert_eq(plan.locate(segs, 155000), 4);
+}

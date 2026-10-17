@@ -1,0 +1,171 @@
+// The sounds, synthesized once at start (no sample files): mono floats in -1..1 at RATE.
+//
+// - Bell: a ring bell struck once. Additive synthesis on Jean-Claude Risset's bell (1969):
+//   eleven inharmonic partials (0.56, 0.92, 1.19, 1.7, 2, 2.74, 3, 3.76 and 4.07 times the
+//   base, two of them doubled 1 and 1.7 Hz apart, which beat like a real bell), each decaying
+//   on its own: the high ones die first, the hum rings on. Pitched up to a small bright bell,
+//   with a short burst of noise for the hammer.
+// - Clapper: the two wooden sticks of the 10-second warning, struck three times; each clack is
+//   a click of noise and three damped resonances of the wood.
+// - Tick: a short beep (a sine and its octave) for the countdown.
+
+import std/math;
+
+pub const RATE: int = 32000;
+
+const BELL_HZ: float = 1250.0;
+
+const BELL_S: float = 2.8;
+
+/// (ratio to the base, amplitude, decay as a fraction of BELL_S, detune in Hz)
+const PARTIALS: [(float, float, float, float)] = [
+    (0.56, 1.0, 1.0, 0.0),
+    (0.56, 0.67, 0.9, 1.0),
+    (0.92, 1.0, 0.65, 0.0),
+    (0.92, 1.8, 0.55, 1.7),
+    (1.19, 2.67, 0.325, 0.0),
+    (1.7, 1.67, 0.35, 0.0),
+    (2.0, 1.46, 0.25, 0.0),
+    (2.74, 1.33, 0.2, 0.0),
+    (3.0, 1.33, 0.15, 0.0),
+    (3.76, 1.0, 0.1, 0.0),
+    (4.07, 1.33, 0.075, 0.0)
+];
+
+/// The rendered sounds, by `plan.Sound`.
+pub struct Bank {
+    bell: [float],
+    clapper: [float],
+    tick: [float],
+}
+
+pub fn bank() -> Bank {
+    Bank { bell: bell(), clapper: clapper(), tick: tick() }
+}
+
+/// A deterministic white noise source (a 32-bit xorshift).
+struct Noise {
+    s: int,
+}
+
+fn next_noise(n: Noise) -> float {
+    var x = n.s;
+    x = (x ^ (x << 13)) & 0xFFFFFFFF;
+    x = x ^ (x >> 17);
+    x = (x ^ (x << 5)) & 0xFFFFFFFF;
+    n.s = x;
+    (x as float) / 2147483648.0 - 1.0
+}
+
+fn seconds(n: int) -> float {
+    (n as float) / (RATE as float)
+}
+
+/// Scales `xs` in place so its loudest sample is `peak`.
+fn normalize(xs: [float], peak: float) {
+    var m = 0.0;
+    for x in xs {
+        let a = math.abs(x);
+        if (a > m) {
+            m = a;
+        }
+    }
+    if (m > 0.0) {
+        let k = peak / m;
+        for i in 0..xs.len() {
+            xs[i] = xs[i] * k;
+        }
+    }
+}
+
+/// `n` samples of silence.
+fn zeros(n: int) -> [float] {
+    var xs: [float] = [];
+    for i in 0..n {
+        xs.push(0.0);
+    }
+    xs
+}
+
+pub fn bell() -> [float] {
+    let n = (BELL_S * (RATE as float)) as int;
+    let xs = zeros(n);
+    let two_pi = 2.0 * math.PI;
+    for p in PARTIALS {
+        let hz = BELL_HZ * p.0 + p.3;
+        // −40 dB at the end of this partial's share of the stroke.
+        let tau = p.2 * BELL_S / 4.6;
+        let w = two_pi * hz / (RATE as float);
+        // A per-sample decay factor instead of an exp per sample.
+        let k = math.exp(-1.0 / (tau * (RATE as float)));
+        var env = p.1;
+        for i in 0..n {
+            xs[i] = xs[i] + env * math.sin(w * (i as float));
+            env = env * k;
+        }
+    }
+    // The hammer: 6 ms of noise, fading fast; and a 1.5 ms attack so the stroke does not click.
+    let noise = Noise { s: 0x2545F491 };
+    let hit = RATE * 6 / 1000;
+    for i in 0..hit {
+        let fade = 1.0 - seconds(i) / seconds(hit);
+        xs[i] = xs[i] + 4.0 * fade * fade * next_noise(noise);
+    }
+    let attack = RATE * 15 / 10000;
+    for i in 0..attack {
+        xs[i] = xs[i] * (i as float) / (attack as float);
+    }
+    normalize(xs, 0.9);
+    xs
+}
+
+const CLACKS: int = 3;
+
+const CLACK_GAP_MS: int = 150;
+
+pub fn clapper() -> [float] {
+    let one = RATE * 90 / 1000;
+    let gap = RATE * CLACK_GAP_MS / 1000;
+    let xs = zeros(gap * (CLACKS - 1) + one);
+    let noise = Noise { s: 0x1B873593 };
+    let two_pi = 2.0 * math.PI;
+    // (Hz, amplitude, decay time in s): the ring of the wood, a hollow body below it.
+    let modes: [(float, float, float)] = [
+        (1850.0, 0.8, 0.012),
+        (3150.0, 0.5, 0.008),
+        (640.0, 0.45, 0.03)
+    ];
+    for c in 0..CLACKS {
+        let at = c * gap;
+        // The last clack a little louder, as hands do.
+        let level = if (c == CLACKS - 1) { 1.0 } else { 0.8 };
+        for i in 0..one {
+            let t = seconds(i);
+            var v = 0.7 * math.exp(-t / 0.002) * next_noise(noise);
+            for m in modes {
+                v = v + m.1 * math.exp(-t / m.2) * math.sin(two_pi * m.0 * t);
+            }
+            xs[at + i] = xs[at + i] + level * v;
+        }
+    }
+    normalize(xs, 0.85);
+    xs
+}
+
+pub fn tick() -> [float] {
+    let n = RATE * 140 / 1000;
+    var xs: [float] = [];
+    let two_pi = 2.0 * math.PI;
+    let attack = RATE * 4 / 1000;
+    for i in 0..n {
+        let t = seconds(i);
+        let env = if (i < attack) {
+            (i as float) / (attack as float)
+        } else {
+            math.exp(-(t - seconds(attack)) / 0.045)
+        };
+        xs.push(env * (math.sin(two_pi * 880.0 * t) + 0.25 * math.sin(two_pi * 1760.0 * t)));
+    }
+    normalize(xs, 0.6);
+    xs
+}

@@ -1,0 +1,163 @@
+// The session as a timeline, computed once from the settings: the segments (get ready, each
+// round, each rest) and the cues (the sounds and the instant they start). Pure: the engine
+// walks it with the audio clock, the tests check it whole.
+
+/// What the user chose (all in seconds except `rounds`).
+pub struct Config {
+    rounds: int,
+    round_s: int,
+    rest_s: int,
+    /// The countdown before the first round (0 = none).
+    prep_s: int,
+    /// The clapper this many seconds before a round ends (0 = none).
+    warn_s: int,
+}
+
+pub enum Phase {
+    Prep,
+    Round,
+    Rest,
+    Done,
+}
+
+pub struct Segment {
+    phase: Phase,
+    /// 1-based; 0 for the countdown.
+    round: int,
+    start_ms: int,
+    dur_ms: int,
+}
+
+/// The sounds a session plays (sounds.ray renders them).
+pub enum Sound {
+    /// One stroke of the ring bell: a round starts.
+    Bell,
+    /// The wooden clapper: the warning before the end of a round.
+    Clapper,
+    /// A short beep: the last seconds of a countdown or a rest.
+    Tick,
+}
+
+pub struct Cue {
+    at_ms: int,
+    sound: Sound,
+}
+
+pub const MAX_ROUNDS: int = 99;
+
+pub const MAX_ROUND_S: int = 59 * 60;
+
+pub const MAX_REST_S: int = 30 * 60;
+
+pub const MAX_PREP_S: int = 60;
+
+/// The pro default: 12 rounds of 3:00 with 1:00 of rest, a 5 s countdown, the clapper at 10 s.
+pub fn default_config() -> Config {
+    Config { rounds: 12, round_s: 180, rest_s: 60, prep_s: 5, warn_s: 10 }
+}
+
+fn clamp(v: int, lo: int, hi: int) -> int {
+    if (v < lo) { lo } else if (v > hi) { hi } else { v }
+}
+
+/// The settings inside their ranges; a round lasts at least 5 s.
+pub fn sanitize(c: Config) -> Config {
+    let round_s = clamp(c.round_s, 5, MAX_ROUND_S);
+    Config {
+        rounds: clamp(c.rounds, 1, MAX_ROUNDS),
+        round_s: round_s,
+        rest_s: clamp(c.rest_s, 0, MAX_REST_S),
+        prep_s: clamp(c.prep_s, 0, MAX_PREP_S),
+        // A warning that would sound before the round even starts is dropped.
+        warn_s: if (c.warn_s >= round_s) { 0 } else { clamp(c.warn_s, 0, round_s) }
+    }
+}
+
+pub fn segments(c: Config) -> [Segment] {
+    var out: [Segment] = [];
+    var t = 0;
+    if (c.prep_s > 0) {
+        out.push(Segment { phase: Phase.Prep, round: 0, start_ms: 0, dur_ms: c.prep_s * 1000 });
+        t = c.prep_s * 1000;
+    }
+    for r in 1..(c.rounds + 1) {
+        out.push(Segment { phase: Phase.Round, round: r, start_ms: t, dur_ms: c.round_s * 1000 });
+        t = t + c.round_s * 1000;
+        if (r < c.rounds && c.rest_s > 0) {
+            out.push(Segment { phase: Phase.Rest, round: r, start_ms: t, dur_ms: c.rest_s * 1000 });
+            t = t + c.rest_s * 1000;
+        }
+    }
+    out
+}
+
+/// The whole session, countdown included.
+pub fn total_ms(c: Config) -> int {
+    let rests = if (c.rest_s > 0) { (c.rounds - 1) * c.rest_s } else { 0 };
+    (c.prep_s + c.rounds * c.round_s + rests) * 1000
+}
+
+/// The beeps of the last `n` seconds before `end_ms`, never before `from_ms`.
+fn ticks(out: [Cue], from_ms: int, end_ms: int, n: int) {
+    var k = n;
+    while (k >= 1) {
+        let at = end_ms - k * 1000;
+        if (at >= from_ms) {
+            out.push(Cue { at_ms: at, sound: Sound.Tick });
+        }
+        k = k - 1;
+    }
+}
+
+/// Every sound of the session in time order: a beep each second of the countdown and of the
+/// last 3 s of a rest, one bell stroke when a round starts, the clapper `warn_s` before it ends,
+/// three strokes when it ends, and five after the last one.
+pub fn cues(c: Config) -> [Cue] {
+    var out: [Cue] = [];
+    for s in segments(c) {
+        let end = s.start_ms + s.dur_ms;
+        match (s.phase) {
+            Phase.Prep => ticks(out, s.start_ms, end, c.prep_s),
+            Phase.Rest => ticks(out, s.start_ms, end, 3),
+            Phase.Round => {
+                // With no rest between rounds the three strokes of the previous one start it.
+                if (s.round == 1 || c.rest_s > 0) {
+                    out.push(Cue { at_ms: s.start_ms, sound: Sound.Bell });
+                }
+                if (c.warn_s > 0) {
+                    out.push(Cue { at_ms: end - c.warn_s * 1000, sound: Sound.Clapper });
+                }
+                let strokes = if (s.round == c.rounds) { 5 } else { 3 };
+                for k in 0..strokes {
+                    out.push(Cue { at_ms: end + k * STROKE_GAP_MS, sound: Sound.Bell });
+                }
+            },
+            Phase.Done => { },
+        }
+    }
+    out
+}
+
+/// The time between the strokes of the end-of-round bell.
+pub const STROKE_GAP_MS: int = 320;
+
+/// Where `t_ms` falls: the index of its segment, or `segments.len()` once the session is over.
+pub fn locate(segs: [Segment], t_ms: int) -> int {
+    var i = 0;
+    while (i < segs.len()) {
+        if (t_ms < segs[i].start_ms + segs[i].dur_ms) {
+            return i;
+        }
+        i = i + 1;
+    }
+    segs.len()
+}
+
+pub fn phase_name(p: Phase) -> string {
+    match (p) {
+        Phase.Prep => "prep",
+        Phase.Round => "round",
+        Phase.Rest => "rest",
+        Phase.Done => "done",
+    }
+}

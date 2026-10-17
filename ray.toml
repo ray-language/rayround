@@ -1,0 +1,30 @@
+[package]
+name = "rayround"
+version = "0.1.0"
+license = "Apache-2.0"
+# std/audio keeps sounding in the background on iOS and Android (1.27.19), std/media puts the
+# timer on the lock screen (1.27.58; Android 1.27.61), and the Android shell follows the
+# system's dark mode (1.27.62).
+raylang = "1.27.64"
+
+# The page (www/) is plain HTML on ray-elements served by the process over ray://app.
+[native]
+embed = ["www"]
+
+[app]
+name = "RayRound"
+id = "org.raylang.rayround"
+icon = "assets/icon.png"
+copyright = "© 2026 Rayala"
+
+# The clock and the sounds live in the raylang program, which keeps writing audio while a
+# session runs: with these, iOS (audio session `playback`) and Android (a mediaPlayback
+# foreground service) keep it running when the screen locks or the user switches apps.
+[ios]
+background_audio = true
+
+[android]
+background_audio = true
+
+[dependencies]
+elements = "^0.5.2"

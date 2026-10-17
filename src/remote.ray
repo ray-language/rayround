@@ -1,0 +1,21 @@
+// The system's media commands (the lock screen, the Control Center, headphone buttons; std/media)
+// arrive as "media" events of `ui.next_event()`; this maps them to the engine's commands.
+
+import engine;
+
+/// The commands RayRound answers, for `media.controls`.
+pub fn commands() -> [string] {
+    ["play", "pause", "toggle", "next", "stop"]
+}
+
+/// The engine command for the `tag` of a "media" event.
+pub fn command(tag: string) -> Option<engine.Cmd> {
+    match (tag) {
+        "play" => Option.Some(engine.Cmd.Resume),
+        "pause" => Option.Some(engine.Cmd.Pause),
+        "toggle" => Option.Some(engine.Cmd.Toggle),
+        "next" => Option.Some(engine.Cmd.Skip),
+        "stop" => Option.Some(engine.Cmd.Stop),
+        _ => Option.None,
+    }
+}

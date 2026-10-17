@@ -1,0 +1,29 @@
+// A short session on this machine's speakers, to hear every sound in 30 s: a 3 s countdown,
+// two rounds of 8 s with the clapper at 4 s, a 5 s rest. Prints the state every second.
+//
+//   ray run scripts/demo.ray          (RAY_AUDIO_TRACE=1 for the output's own report)
+
+import std/time;
+import engine;
+import plan;
+
+fn main() -> int {
+    let cmds: Channel<engine.Cmd> = Channel.bounded(64);
+    let _e = spawn(fn() {
+        engine.run(cmds, b"");
+    });
+    let c = plan.Config { rounds: 2, round_s: 8, rest_s: 5, prep_s: 3, warn_s: 4 };
+    send(cmds, engine.Cmd.Start(c));
+    let total = plan.total_ms(c);
+    let t0 = time.monotonic();
+    while (time.monotonic() - t0 < total + 5000) {
+        let s = engine.query(cmds);
+        print(
+            "${time.monotonic() - t0} ms  ${s.status} ${s.phase} ${s.round}/${s.rounds}  left ${s.remaining_ms} ms  elapsed ${s.elapsed_ms}${if (s.error != "") { "  " + s.error } else { "" }}"
+        );
+        time.sleep(1000);
+    }
+    send(cmds, engine.Cmd.Quit);
+    time.sleep(300);
+    0
+}
