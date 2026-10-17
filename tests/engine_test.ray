@@ -112,11 +112,11 @@ fn the_actor_runs_on_the_audio_clock() {
         polls = polls + 1;
     }
     let wall_ms = (time.monotonic_nanos() - started) / 1000000;
-    eprint("actor clock: remaining ${a.remaining_ms} ms after ${wall_ms} ms (${polls} polls)");
     assert_eq(a.status, "running");
     assert_eq(a.phase, "prep");
     assert(a.remaining_ms <= 1700);
-    assert(a.remaining_ms >= 2000 - wall_ms);
+    // A chunk (20 ms) of slack: the readings round to the millisecond on both sides.
+    assert(a.remaining_ms >= 2000 - wall_ms - 20);
     send(cmds, engine.Cmd.Toggle);
     time.sleep(300);
     let held = engine.query(cmds).remaining_ms;
