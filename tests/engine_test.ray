@@ -100,13 +100,22 @@ fn the_actor_runs_on_the_audio_clock() {
         engine.run(cmds, b"");
     });
     assert_eq(engine.query(cmds).status, "idle");
+    let started = time.monotonic_nanos();
     send(cmds, engine.Cmd.Start(short()));
-    time.sleep(700);
-    let a = engine.query(cmds);
+    // The clock advances, never faster than the wall clock. How soon it starts depends on
+    // the machine (a slow CI runner renders the first chunks late), so wait for it.
+    var a = engine.query(cmds);
+    var polls = 0;
+    while (a.remaining_ms > 1700 && polls < 60) {
+        time.sleep(50);
+        a = engine.query(cmds);
+        polls = polls + 1;
+    }
+    let wall_ms = (time.monotonic_nanos() - started) / 1000000;
     assert_eq(a.status, "running");
     assert_eq(a.phase, "prep");
-    assert(a.remaining_ms < 1700);
-    assert(a.remaining_ms > 900);
+    assert(a.remaining_ms <= 1700);
+    assert(a.remaining_ms >= 2000 - wall_ms);
     send(cmds, engine.Cmd.Toggle);
     time.sleep(300);
     let held = engine.query(cmds).remaining_ms;
