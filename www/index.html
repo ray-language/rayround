@@ -29,24 +29,24 @@
   }
   .round-of { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-sm); letter-spacing: 0.06em; }
 
-  /* The dial: an SVG ring that empties as the phase runs out, the time in the middle. */
-  .dial { position: relative; width: min(82vw, 21rem); aspect-ratio: 1; }
+  /* The dial: a ring that empties as the phase runs out, the time in the middle, and a
+     watch's minute marks around it. */
+  .dial { --d: min(82vw, 21rem); position: relative; width: var(--d); aspect-ratio: 1; display: grid; place-items: center; }
   .dial::before {
     content: ""; position: absolute; inset: 8%; border-radius: 50%;
     background: radial-gradient(circle, var(--phase-soft) 0%, transparent 70%);
     filter: blur(18px); opacity: 0.9; transition: background 300ms;
   }
-  .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
-  .dial .track { stroke: var(--ray-border); }
+  .dial .ticks { position: absolute; inset: 0; width: 100%; height: 100%; }
   .dial .minor { stroke: var(--ray-border); }
-  .dial .bar {
-    stroke: var(--phase); stroke-linecap: round;
+  .ring::part(track) { stroke: var(--ray-border); }
+  /* The ring follows the clock frame by frame: no easing behind it. */
+  .ring::part(bar) {
+    stroke: var(--phase);
     filter: drop-shadow(0 0 6px color-mix(in srgb, var(--phase) 55%, transparent));
     transition: stroke 300ms;
   }
-  .dial .center {
-    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  }
+  .dial .center { display: flex; flex-direction: column; align-items: center; }
   .clock {
     font-size: clamp(3.6rem, 19vw, 5.6rem); font-weight: 800; line-height: 1;
     font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
@@ -58,28 +58,19 @@
   @keyframes beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.06); } }
   @keyframes blink { 50% { opacity: 0.35; } }
 
-  /* One pip per round: done, current, still to come. */
-  .pips { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: 21rem; min-height: 10px; }
-  .pip { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--ray-border); transition: all 250ms; }
-  .pip.done { background: var(--ray-primary); border-color: var(--ray-primary); }
-  .pip.now { border-color: var(--ray-primary); box-shadow: 0 0 0 3px var(--ray-primary-light); }
-  .pips.many .pip { width: 7px; height: 7px; border-width: 1.5px; }
+  .pips { max-width: 21rem; }
 
   .totals { width: min(88vw, 22rem); }
   .totals .row { display: flex; justify-content: space-between; color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); font-variant-numeric: tabular-nums; margin-bottom: var(--ray-space-1); }
 
   .controls { display: flex; align-items: center; justify-content: center; gap: var(--ray-space-xl); margin-top: var(--ray-space-sm); }
-  #main {
-    --size: 5.5rem;
-    width: var(--size); height: var(--size); border-radius: 50%; border: 0; cursor: pointer;
-    display: grid; place-items: center; color: var(--ray-red-contrast);
+  /* The main action: a big round ray-icon-button, lit from above. */
+  #main::part(button) {
     background: radial-gradient(circle at 35% 30%, var(--ray-red-5), var(--ray-red-9));
     box-shadow: 0 10px 28px -6px color-mix(in srgb, var(--ray-red-7) 70%, transparent), inset 0 -4px 0 color-mix(in srgb, var(--ray-red-9) 60%, transparent);
-    transition: transform 120ms, box-shadow 120ms;
+    transition: transform 120ms;
   }
-  #main:active { transform: scale(0.95); box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--ray-red-7) 70%, transparent), inset 0 -2px 0 color-mix(in srgb, var(--ray-red-9) 60%, transparent); }
-  #main svg { width: 2.4rem; height: 2.4rem; }
-  #main:focus-visible { outline: 3px solid var(--ray-primary-light); outline-offset: 4px; }
+  #main:active::part(button) { transform: scale(0.95); }
 
   .summary { width: min(92vw, 24rem); }
   .summary .line { display: flex; align-items: center; justify-content: space-between; gap: var(--ray-space-sm); }
@@ -88,19 +79,7 @@
   .summary[hidden] { display: none; }
 
   /* Settings */
-  .presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--ray-space-xs); }
-  .preset {
-    text-align: left; padding: var(--ray-space-sm); border-radius: var(--ray-radius-md); cursor: pointer;
-    border: 1px solid var(--ray-border); background: var(--ray-card); color: var(--ray-foreground); font: inherit;
-  }
-  .preset b { display: block; font-size: var(--ray-font-size-sm); }
-  .preset span { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); font-variant-numeric: tabular-nums; }
-  .preset[aria-pressed="true"] { border-color: var(--ray-primary); background: var(--ray-primary-light); }
-  .duration { display: flex; align-items: center; justify-content: space-between; gap: var(--ray-space-sm); }
-  .duration .label { font-size: var(--ray-font-size-sm); font-weight: 600; }
   .note { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
-  .duration .hint { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); }
-  .duration .value { min-width: 4.2rem; text-align: center; font-size: var(--ray-font-size-xl); font-weight: 700; font-variant-numeric: tabular-nums; }
   .section-title { font-size: var(--ray-font-size-xs); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ray-muted-foreground); margin-top: var(--ray-space-sm); }
   .notice { color: var(--ray-muted-foreground); font-size: var(--ray-font-size-xs); text-align: center; min-height: 1.2em; }
 </style>
@@ -119,22 +98,21 @@
     </div>
 
     <div class="dial">
-      <svg viewBox="0 0 200 200" aria-hidden="true">
-        <g id="ticks"></g>
-        <circle class="track" cx="100" cy="100" r="84" fill="none" stroke-width="8"></circle>
-        <circle class="bar" id="bar" cx="100" cy="100" r="84" fill="none" stroke-width="8"></circle>
-      </svg>
-      <div class="center">
-        <div class="clock" id="clock" role="timer" aria-live="off">3:00</div>
-        <div class="sub" id="sub">Pulsa para empezar</div>
-      </div>
+      <svg class="ticks" viewBox="0 0 200 200" aria-hidden="true"><g id="ticks"></g></svg>
+      <ray-ring-progress class="ring" id="ring" size="calc(var(--d) * 0.88)" thickness="calc(var(--d) * 0.04)" value="100" round-caps label="Tiempo de la fase">
+        <div class="center">
+          <div class="clock" id="clock" role="timer" aria-live="off">3:00</div>
+          <div class="sub" id="sub">Pulsa para empezar</div>
+        </div>
+      </ray-ring-progress>
     </div>
 
-    <div class="pips" id="pips" aria-hidden="true"></div>
+    <!-- The heading already reads "Round 4 de 12"; the dots are for the eye. -->
+    <ray-step-dots class="pips" id="pips" count="12" value="0" aria-hidden="true"></ray-step-dots>
 
     <div class="controls">
       <ray-icon-button id="reset" label="Reiniciar" size="xl" variant="default" radius="full" disabled><ray-icon name="reset"></ray-icon></ray-icon-button>
-      <button id="main" type="button" aria-label="Empezar"></button>
+      <ray-icon-button id="main" label="Empezar" size="5.5rem" radius="full" variant="filled"><ray-icon name="play"></ray-icon></ray-icon-button>
       <ray-icon-button id="skip" label="Saltar fase" size="xl" variant="default" radius="full" disabled><ray-icon name="skip"></ray-icon></ray-icon-button>
     </div>
 
@@ -160,26 +138,16 @@
 <ray-drawer id="settings" position="bottom" size="85dvh" label="Ajustes">
   <ray-stack gap="md">
     <div class="section-title">Preajustes</div>
-    <div class="presets" id="presets"></div>
+    <ray-radio-group id="presets" aria-label="Preajustes">
+      <ray-grid cols="2" gap="xs" id="preset-cards"></ray-grid>
+    </ray-radio-group>
 
     <div class="section-title">Sesión</div>
     <ray-number-input id="rounds" label="Rounds" min="1" max="99" value="12" size="md"></ray-number-input>
-    <div class="duration" data-key="round_s" data-min="5" data-max="3540">
-      <div><div class="label">Duración del round</div><div class="hint">pasos de 15 s</div></div>
-      <ray-group gap="xs" nowrap>
-        <ray-icon-button label="Menos" variant="default" size="lg" data-step="-15"><ray-icon name="minus"></ray-icon></ray-icon-button>
-        <div class="value">3:00</div>
-        <ray-icon-button label="Más" variant="default" size="lg" data-step="15"><ray-icon name="plus"></ray-icon></ray-icon-button>
-      </ray-group>
-    </div>
-    <div class="duration" data-key="rest_s" data-min="0" data-max="1800">
-      <div><div class="label">Descanso</div><div class="hint">0 = sin descanso</div></div>
-      <ray-group gap="xs" nowrap>
-        <ray-icon-button label="Menos" variant="default" size="lg" data-step="-15"><ray-icon name="minus"></ray-icon></ray-icon-button>
-        <div class="value">1:00</div>
-        <ray-icon-button label="Más" variant="default" size="lg" data-step="15"><ray-icon name="plus"></ray-icon></ray-icon-button>
-      </ray-group>
-    </div>
+    <ray-group grow gap="sm" align="start">
+      <ray-number-input id="round_s" label="Round" description="pasos de 15 s" format="duration" min="5" max="3540" step="15" value="180" size="md"></ray-number-input>
+      <ray-number-input id="rest_s" label="Descanso" description="0 = sin descanso" format="duration" min="0" max="1800" step="15" value="60" size="md"></ray-number-input>
+    </ray-group>
     <ray-group grow gap="sm">
       <ray-number-input id="prep" label="Cuenta atrás" min="0" max="60" value="5" suffix=" s" size="md"></ray-number-input>
       <ray-number-input id="warn" label="Aviso final" min="0" max="60" value="10" suffix=" s" size="md"></ray-number-input>
@@ -223,9 +191,6 @@ setIcons({
 await enableRaylang();
 
 const $ = (id) => document.getElementById(id);
-const PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>';
-const PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.2" height="14" rx="1.2"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.2"/></svg>';
-const R = 84, CIRC = 2 * Math.PI * R;
 
 const PRESETS = [
   { name: 'Boxeo profesional', rounds: 12, round_s: 180, rest_s: 60 },
@@ -283,12 +248,10 @@ async function call(op, args) {
     html += `<line class="minor" x1="${100 + r1 * Math.cos(a)}" y1="${100 + r1 * Math.sin(a)}" x2="${100 + r2 * Math.cos(a)}" y2="${100 + r2 * Math.sin(a)}" stroke-width="${long ? 1.6 : 0.8}" stroke-linecap="round"/>`;
   }
   g.innerHTML = html;
-  $('bar').style.strokeDasharray = CIRC;
 }
 
 function setRing(fraction) {
-  const f = Math.min(1, Math.max(0, fraction));
-  $('bar').style.strokeDashoffset = CIRC * (1 - f);
+  $('ring').value = 100 * Math.min(1, Math.max(0, fraction));
 }
 
 // What the clock shows now: the last snapshot moved on by the time since it arrived.
@@ -320,7 +283,7 @@ function paint() {
     $('elapsed').textContent = '0:00';
     $('total').textContent = fmt(totalOf(config));
     $('total-bar').value = 0;
-    paintPips(0, config.rounds, false);
+    paintPips(0, config.rounds);
     return;
   }
   const rem = liveRemaining();
@@ -349,29 +312,22 @@ function paint() {
   $('total').textContent = '−' + fmt(s.total_ms - el, true);
   $('total-bar').value = s.total_ms ? (100 * el) / s.total_ms : 0;
   const doneRounds = s.phase === 'done' ? s.rounds : (s.phase === 'rest' ? s.round : Math.max(0, s.round - 1));
-  paintPips(doneRounds, s.rounds, s.phase === 'round');
+  paintPips(doneRounds, s.rounds);
 }
 
-let pipsKey = '';
-function paintPips(done, total, current) {
-  const key = done + '/' + total + '/' + current;
-  if (key === pipsKey) return;
-  pipsKey = key;
-  const box = $('pips');
-  box.classList.toggle('many', total > 24);
-  let html = '';
-  for (let i = 0; i < total; i++) {
-    const cls = i < done ? 'done' : (current && i === done ? 'now' : '');
-    html += `<span class="pip ${cls}"></span>`;
-  }
-  box.innerHTML = html;
+// One dot per round: the done ones filled, the current (or next) one a pill.
+function paintPips(done, total) {
+  const dots = $('pips');
+  if (dots.count !== total) dots.count = total;
+  if (dots.value !== done) dots.value = done;
+  dots.size = total > 24 ? 'xs' : 'sm';
 }
 
 function onState() {
   const s = state;
   const active = s && (s.status === 'running' || s.status === 'paused');
-  $('main').innerHTML = s && s.status === 'running' ? PAUSE : PLAY;
-  $('main').setAttribute('aria-label', s && s.status === 'running' ? 'Pausa' : (s && s.status === 'paused' ? 'Seguir' : 'Empezar'));
+  $('main').querySelector('ray-icon').name = s && s.status === 'running' ? 'pause' : 'play';
+  $('main').label = s && s.status === 'running' ? 'Pausa' : (s && s.status === 'paused' ? 'Seguir' : 'Empezar');
   $('reset').disabled = !active && !(s && s.status === 'done');
   $('skip').disabled = !active;
   $('summary').hidden = !!active;
@@ -427,12 +383,10 @@ function paintSettings() {
   $('rounds').value = config.rounds;
   $('prep').value = config.prep_s;
   $('warn').value = config.warn_s;
-  for (const d of document.querySelectorAll('.duration')) {
-    d.querySelector('.value').textContent = fmtS(config[d.dataset.key]);
-  }
-  for (const b of document.querySelectorAll('.preset')) {
-    b.setAttribute('aria-pressed', String(sameAs(PRESETS[Number(b.dataset.i)])));
-  }
+  $('round_s').value = config.round_s;
+  $('rest_s').value = config.rest_s;
+  const i = PRESETS.findIndex(sameAs);
+  $('presets').value = i < 0 ? '' : String(i);
   $('volume').value = prefs.volume;
   $('awake').checked = prefs.awake;
   $('vibrate').checked = prefs.vibrate;
@@ -452,43 +406,24 @@ function saveConfig() {
 }
 
 {
-  const box = $('presets');
-  box.innerHTML = PRESETS.map((p, i) =>
-    `<button type="button" class="preset" data-i="${i}" aria-pressed="false"><b>${p.name}</b><span>${p.rounds} × ${fmtS(p.round_s)} · ${p.rest_s ? 'desc. ' + fmtS(p.rest_s) : 'sin desc.'}</span></button>`).join('');
-  box.addEventListener('click', (e) => {
-    const b = e.target.closest('.preset');
-    if (!b) return;
-    const p = PRESETS[Number(b.dataset.i)];
+  $('preset-cards').innerHTML = PRESETS.map((p, i) =>
+    `<ray-radio-card value="${i}" hide-indicator label="${p.name}" description="${p.rounds} × ${fmtS(p.round_s)} · ${p.rest_s ? 'desc. ' + fmtS(p.rest_s) : 'sin desc.'}"></ray-radio-card>`).join('');
+  $('presets').addEventListener('change', (e) => {
+    const p = PRESETS[Number(e.target.value)];
+    if (!p) return;
     Object.assign(config, { rounds: p.rounds, round_s: p.round_s, rest_s: p.rest_s });
     saveConfig();
   });
 }
 
-for (const d of document.querySelectorAll('.duration')) {
-  const key = d.dataset.key, min = Number(d.dataset.min), max = Number(d.dataset.max);
-  for (const b of d.querySelectorAll('[data-step]')) {
-    const step = () => {
-      const v = config[key] + Number(b.dataset.step);
-      config[key] = Math.min(max, Math.max(min, v));
-      // The warning has to fit in the round.
-      if (key === 'round_s' && config.warn_s >= config.round_s) config.warn_s = 0;
-      saveConfig();
-    };
-    // Tap to step, hold to repeat.
-    let timer = 0, repeat = 0;
-    const stop = () => { clearTimeout(timer); clearInterval(repeat); };
-    b.addEventListener('pointerdown', () => { step(); timer = setTimeout(() => { repeat = setInterval(step, 90); }, 400); });
-    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, stop);
-    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); step(); } });
-  }
-}
-
-for (const [id, key] of [['rounds', 'rounds'], ['prep', 'prep_s'], ['warn', 'warn_s']]) {
+for (const key of ['rounds', 'round_s', 'rest_s', 'prep_s', 'warn_s']) {
+  const id = key === 'prep_s' ? 'prep' : key === 'warn_s' ? 'warn' : key;
   $(id).addEventListener('change', (e) => {
     const v = Number(e.target.value);
     if (!Number.isFinite(v)) return;
     config[key] = v;
-    if (key === 'warn_s' && config.warn_s >= config.round_s) config.warn_s = 0;
+    // The warning has to fit in the round.
+    if (config.warn_s >= config.round_s) config.warn_s = 0;
     saveConfig();
   });
 }

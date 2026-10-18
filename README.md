@@ -121,10 +121,13 @@ En `findings/open/rayround-1.27.64.md` del directorio de las apps:
 1. **#182 [E]**: sin `ray bundle --devtools`, los errores y la consola de la página no llegan a
    ningún log en la shell móvil. La app quedó a medio pintar sin ninguna pista hasta añadir un
    puente de log propio (`op: log`).
-2. **#183–#187 [E]**, piezas que ray-elements 0.5.2 no trae y que la página construye a mano: el
+2. **#183–#187 [E]**, piezas que ray-elements 0.5.2 no trae y que la página construía a mano: el
    anillo de progreso del dial (#183), la duración `m:ss` en `ray-number-input` (#184), los puntos
    de rounds (#185), el botón principal grande y redondo (#186) y las tarjetas de preajuste
-   seleccionables (#187).
+   seleccionables (#187). ray-elements 0.6.0 los trae todos (`ray-ring-progress`,
+   `format="duration"`, `ray-step-dots`, `size` con cualquier longitud, `ray-radio-card`) y la
+   app ya los usa. A `ray-step-dots` le queda anunciar en el idioma de la página (#185 ⚠️): aquí
+   va `aria-hidden`, porque el título ya dice «Round 4 de 12».
 
 Descartado: `ray_doc` parecía no conocer `std/media`, pero era el servidor MCP, que seguía siendo
 el de una versión anterior al módulo; reconectado, lo documenta.
