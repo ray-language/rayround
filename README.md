@@ -125,9 +125,8 @@ En `findings/open/rayround-1.27.64.md` del directorio de las apps:
    anillo de progreso del dial (#183), la duración `m:ss` en `ray-number-input` (#184), los puntos
    de rounds (#185), el botón principal grande y redondo (#186) y las tarjetas de preajuste
    seleccionables (#187). ray-elements 0.6.0 los trae todos (`ray-ring-progress`,
-   `format="duration"`, `ray-step-dots`, `size` con cualquier longitud, `ray-radio-card`) y la
-   app ya los usa. A `ray-step-dots` le queda anunciar en el idioma de la página (#185 ⚠️): aquí
-   va `aria-hidden`, porque el título ya dice «Round 4 de 12».
+   `format="duration"`, `ray-step-dots`, `size` con cualquier longitud, `ray-radio-card`), 0.7.0
+   deja anunciar los puntos en español (`value-text`), y la app los usa.
 
 Descartado: `ray_doc` parecía no conocer `std/media`, pero era el servidor MCP, que seguía siendo
 el de una versión anterior al módulo; reconectado, lo documenta.

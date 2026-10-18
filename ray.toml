@@ -27,4 +27,4 @@ background_audio = true
 background_audio = true
 
 [dependencies]
-elements = "^0.6.0"
+elements = "^0.7.0"
