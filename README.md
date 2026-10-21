@@ -110,7 +110,8 @@ al stderr del programa (`op: log`), que `xcrun simctl launch --console-pty` mues
 | Audio real en el Mac (CoreAudio) | **verificado** (17 oct 2026, raylang 1.27.63): `make demo` con `RAY_AUDIO_TRACE=1`: `gaps 0`, `fade-outs 1`; el reloj mostrado va ~0,3 s por detrás del de pared (la cola del dispositivo) |
 | Página | `make check-page` sin errores ni avisos; vista en Chrome (tema claro y oscuro, todas las fases, el panel de ajustes) |
 | Simulador de iOS (iPhone 17 Pro, iOS 26.5) | **verificado**: la página carga en el webview de la shell, una sesión corre (cuenta atrás → round), y tras 20 s con otra app delante vuelve con el reloj donde debía (0:32 = 5 + 20 + 7) |
-| Android | APK de depuración compilado (`make android-apk`); **sin probar** en dispositivo ni emulador |
+| Emulador de Android | **verificado** (probado a mano; anotado el 21 oct 2026): APK de depuración de `make android-apk` |
+| Android real | **sin probar** |
 | iPhone real (iPhone 12) | **en prueba** (17 oct 2026, raylang 1.27.64): instalada desde Xcode, funciona; el equipo de firma va en `RayRound-ios/App.xcconfig` |
 | Pantalla de bloqueo, auriculares | **sin probar** |
 
